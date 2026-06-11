@@ -63,6 +63,29 @@ func main() {
     sigCh := make(chan os.Signal, 1)
     signal.Notify(sigCh, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM)
 
+    // 按键输入通道
+    keyCh := make(chan terminal.KeyEvent, 1)
+    go func() {
+        buf := make([]byte, 256)
+        for {
+            n, err := os.Stdin.Read(buf)
+            if err != nil || n == 0 {
+                close(keyCh)
+                return
+            }
+            i := 0
+            for i < n {
+                ev, consumed := terminal.ParseKeySequence(buf[i:n])
+                if consumed == 0 {
+                    i++
+                    continue
+                }
+                i += consumed
+                keyCh <- ev
+            }
+        }
+    }()
+
     // 绘制
     frame := terminal.NewFrame(term)
     area := frame.Area()
@@ -72,7 +95,7 @@ func main() {
         SetTitle(" Hello, Gugu! ").
         SetTitleStyle(style.NewStyle().Bold().SetFg(style.Yellow))
 
-    para := widgets.NewParagraph("Welcome to Gugu TUI Framework!").
+    para := widgets.NewParagraph("Welcome to Gugu TUI Framework!\n\nPress q to quit.").
         SetBlock(block).
         SetStyle(style.NewStyle().SetFg(style.White))
 
@@ -81,7 +104,16 @@ func main() {
     term.Flush()
 
     // 等待退出
-    <-sigCh
+    for {
+        select {
+        case <-sigCh:
+            return
+        case ev, ok := <-keyCh:
+            if !ok || (ev.Code == terminal.KeyChar && ev.Text == "q") {
+                return
+            }
+        }
+    }
 }
 ```
 
