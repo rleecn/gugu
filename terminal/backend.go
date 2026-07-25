@@ -42,7 +42,9 @@ type Backend interface {
 const (
 	escape        = "\x1b["
 	resetSeq      = "\x1b[0m"
-	clearScreen   = "\x1b[2J"
+	// clearScreen: 先归位光标再清屏，等价于 `clear` 命令的视觉效果，
+	// 避免仅用 \x1b[2J 导致光标停在原处、下一帧渲染错位。
+	clearScreen   = "\x1b[H\x1b[2J"
 	altScreenOn   = "\x1b[?1049h"
 	altScreenOff  = "\x1b[?1049l"
 	hideCursorSeq = "\x1b[?25l"

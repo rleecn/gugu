@@ -96,11 +96,8 @@ func (b *CrossBackend) DisableRawMode() error {
 	return nil
 }
 
-// Clear clears the terminal screen on Windows.
-func (b *CrossBackend) Clear() error {
-	_, err := os.Stdout.Write([]byte("\x1b[2J\x1b[H"))
-	return err
-}
+// Clear 继承 AnsiBackend.Clear（写 \x1b[H\x1b[2J 到 b.w=os.Stdout）。
+// 不再单独覆盖：原实现 os.Stdout.Write 与 AnsiBackend.b.Write 指向同一句柄，等价。
 
 // GetCursorPosition returns the current cursor position on Windows.
 func (b *CrossBackend) GetCursorPosition() (uint16, uint16, error) {
@@ -112,5 +109,8 @@ func (b *CrossBackend) GetCursorPosition() (uint16, uint16, error) {
 	return uint16(csbi.CursorPosition.X), uint16(csbi.CursorPosition.Y), nil
 }
 
-// Ensure interface is satisfied
-var _ Backend = (*CrossBackend)(nil)
+// Ensure interfaces are satisfied
+var (
+	_ Backend   = (*CrossBackend)(nil)
+	_ RawWriter = (*CrossBackend)(nil)
+)

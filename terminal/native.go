@@ -3,14 +3,10 @@
 package terminal
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"syscall"
 	"time"
 	"unsafe"
-
-	"github.com/rleecn/gugu/buffer"
 )
 
 func init() {
@@ -91,61 +87,39 @@ func (b *NativeBackend) DisableRawMode() error {
 	return nil
 }
 
-// Clear clears the terminal screen.
-func (b *NativeBackend) Clear() error {
-	cmd := exec.Command("clear")
-	cmd.Stdout = os.Stdout
-	return cmd.Run()
+// Clear 继承 AnsiBackend.Clear 的实现（直接写 ANSI \x1b[H\x1b[2J）。
+// 不再覆盖为 exec.Command("clear")，避免每次清屏 fork 子进程的开销与潜在副作用。
+
+// Suspend 挂起 TUI：先恢复终端 cooked 模式，再退出 alt screen、显示光标。
+// NativeBackend 覆盖了 AnsiBackend 的 Suspend，额外处理 raw mode 切换。
+func (b *NativeBackend) Suspend() error {
+	// 先 flush 确保所有输出已写入
+	if err := b.Flush(); err != nil {
+		return err
+	}
+	// 禁用 raw mode，恢复原始 termios
+	if err := b.DisableRawMode(); err != nil {
+		return err
+	}
+	// 退出 alt screen + 显示光标 + flush
+	return b.AnsiBackend.Suspend()
 }
 
-// GetCursorPosition returns the current cursor position using DSR (Device Status Report).
-// It sends ESC[6n and reads the response ESC[row;colR.
+// Resume 恢复 TUI：先进入 alt screen，再启用 raw mode。
+func (b *NativeBackend) Resume() error {
+	// 进入 alt screen + 隐藏光标 + flush
+	if err := b.AnsiBackend.Resume(); err != nil {
+		return err
+	}
+	// 重新启用 raw mode
+	return b.EnableRawMode()
+}
+
+// GetCursorPosition 返回当前光标位置 (x=col, y=row, 0-based)。
+// 通过 DSR (ESC[6n) 请求并由 queryCursorPositionViaDSR 使用 unix.Poll 带
+// 超时读取响应，避免老实现 goroutine + 阻塞 Read 在超时后泄漏的问题。
 func (b *NativeBackend) GetCursorPosition() (uint16, uint16, error) {
-	// Send DSR request
-	if _, err := os.Stdout.Write([]byte("\x1b[6n")); err != nil {
-		return 0, 0, fmt.Errorf("failed to send DSR: %w", err)
-	}
-	os.Stdout.Sync()
-
-	// Read response with timeout
-	response := make([]byte, 32)
-	var n int
-	var err error
-
-	// Set a read deadline using a goroutine
-	done := make(chan struct{})
-	go func() {
-		n, err = os.Stdin.Read(response)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// got response
-	case <-time.After(100 * time.Millisecond):
-		return 0, 0, fmt.Errorf("timeout waiting for cursor position response")
-	}
-
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to read DSR response: %w", err)
-	}
-
-	// Parse response: ESC[row;colR
-	resp := string(response[:n])
-	var row, col uint16
-	if _, err := fmt.Sscanf(resp, "\x1b[%d;%dR", &row, &col); err != nil {
-		return 0, 0, fmt.Errorf("failed to parse cursor position: %w", err)
-	}
-
-	// Convert from 1-based to 0-based
-	if row > 0 {
-		row--
-	}
-	if col > 0 {
-		col--
-	}
-
-	return col, row, nil
+	return queryCursorPositionViaDSR(100 * time.Millisecond)
 }
 
 func getTerminalSize() (uint16, uint16, error) {
@@ -169,7 +143,8 @@ func getTerminalSize() (uint16, uint16, error) {
 
 // Ensure interfaces are satisfied
 var (
-	_ Backend = (*NativeBackend)(nil)
-	_ Backend = (*AnsiBackend)(nil)
-	_ buffer.CellDiff
+	_ Backend        = (*NativeBackend)(nil)
+	_ Backend        = (*AnsiBackend)(nil)
+	_ SuspendCapable = (*NativeBackend)(nil)
+	_ RawWriter      = (*NativeBackend)(nil)
 )

@@ -136,15 +136,15 @@ var Shadow = struct {
 // The dot values are: 1=0x01, 2=0x02, 3=0x04, 4=0x08, 5=0x10, 6=0x20, 7=0x40, 8=0x80
 var Braille = struct {
 	Empty string // ⠀ (U+2800)
-	Dot1  string // ⠁
-	Dot2  string // ⠂
-	Dot3  string // ⠄
-	Dot4  string // ⠈
-	Dot5  string // ⠐
-	Dot6  string // ⠠
-	Dot7  string // ⠀⠄ (U+2840)
-	Dot8  string // ⠀⠈ (U+2880)
-	Full  string // ⣿ (all 8 dots)
+	Dot1  string // ⠁ (U+2801)
+	Dot2  string // ⠂ (U+2802)
+	Dot3  string // ⠄ (U+2804)
+	Dot4  string // ⠈ (U+2808)
+	Dot5  string // ⠐ (U+2810)
+	Dot6  string // ⠠ (U+2820)
+	Dot7  string // ⢀ (U+2840)
+	Dot8  string // ⡀ (U+2880)
+	Full  string // ⣿ (U+28FF, all 8 dots)
 }{
 	Empty: "\u2800",
 	Dot1:  "\u2801",
@@ -313,6 +313,15 @@ var Pixel6 = struct {
 
 // Pixel6FromSextants returns the sextant character for the given 6-pixel on/off states.
 // Pixels are numbered: top-left=1, top-right=2, mid-left=3, mid-right=4, bot-left=5, bot-right=6.
+//
+// 实现依据 Unicode 13.0「Symbols for Legacy Computing」sextant 块（U+1FB00–U+1FB3B）。
+// 该块只编码 60 个 sextant 模式，另有 3 个模式因复用已有 Block Elements 而缺省：
+//   - bits=21 (dots 1,3,5 = 左列) → ▌ LEFT HALF BLOCK (U+258C)
+//   - bits=42 (dots 2,4,6 = 右列) → ▐ RIGHT HALF BLOCK (U+2590)
+//   - bits=63 (全部)            → █ FULL BLOCK (U+2588)
+//
+// 因此 sextant 码位偏移并非简单的 bits-1，需在跨越 21/42 时各减 1。
+// 参考: https://www.unicode.org/charts/nameslist/n_1FB00.html
 func Pixel6FromSextants(p1, p2, p3, p4, p5, p6 bool) string {
 	index := 0
 	if p1 {
@@ -333,35 +342,33 @@ func Pixel6FromSextants(p1, p2, p3, p4, p5, p6 bool) string {
 	if p6 {
 		index |= 32
 	}
-	if index == 0 {
+	switch index {
+	case 0:
 		return " "
-	}
-	if index == 63 {
+	case 21: // dots 1,3,5 = 左半列，复用 Left Half Block
+		return "▌"
+	case 42: // dots 2,4,6 = 右半列，复用 Right Half Block
+		return "▐"
+	case 63: // 全部填充，复用 Full Block
 		return "█"
 	}
-	// Sextant characters: U+1FB00 to U+1FB3B
-	// Mapping follows Unicode 13.0 draft: https://www.unicode.org/charts/PDF/U1FB00.pdf
-	// The encoding maps the 6-pixel pattern to a specific codepoint.
 	return string(rune(0x1FB00 + sextantIndex(index)))
 }
 
-// sextantIndex maps a 6-bit pattern to the sextant character offset.
+// sextantIndex maps a 6-bit pattern (排除 0/21/42/63 后) 到 sextant 码位偏移。
+// 0 < bits < 21: 偏移 = bits - 1
+// 21 < bits < 42: 偏移 = bits - 2 （跳过被复用的 bits=21）
+// 42 < bits < 63: 偏移 = bits - 3 （跳过被复用的 bits=21 与 bits=42）
+// 调用方需保证 bits ∈ {1..62} \ {21,42}。
 func sextantIndex(bits int) int {
-	// The sextant characters follow a specific ordering in Unicode.
-	// We use a lookup table for the common patterns.
-	// For simplicity, we map directly using the Unicode defined order.
-	// Reference: https://www.unicode.org/charts/PDF/U1FB00.pdf
-	type mapping struct {
-		bits  int
-		index int
+	switch {
+	case bits < 21:
+		return bits - 1
+	case bits < 42:
+		return bits - 2
+	default: // 43..62
+		return bits - 3
 	}
-	// Sextant encoding: dots are numbered 1-6 corresponding to bits 0-5
-	// Unicode order for sextants follows the pattern where:
-	// bit0=dot1(top-left), bit1=dot2(top-right), bit2=dot3(mid-left),
-	// bit3=dot4(mid-right), bit4=dot5(bot-left), bit5=dot6(bot-right)
-	// The Unicode codepoints U+1FB00..U+1FB3B cover 60 of the 63 non-empty patterns
-	// (excluding the 3 patterns that are already covered by existing block elements)
-	return bits - 1
 }
 
 // Pixel8 divides a cell into a 2x4 grid using octant characters.

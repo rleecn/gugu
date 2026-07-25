@@ -457,8 +457,10 @@ func (t Table) renderWithState(area layout.Rect, buf *buffer.Buffer, state *Tabl
 			}
 		}
 
+		// 列高亮：hasColumnSelect 置位即激活，独立于行选中。
+		// 同时选中行+列时使用 cellHighlightStyle（见 renderCellRow）。
 		selectedCol := -1
-		if isSelected && state.hasColumnSelect {
+		if state.hasColumnSelect {
 			selectedCol = state.selectedColumn
 		}
 
@@ -502,22 +504,31 @@ func (t Table) calculateColumnWidths(inner layout.Rect) []uint16 {
 
 func (t Table) renderCellRow(buf *buffer.Buffer, inner layout.Rect, y uint16, cells []TableCell, colWidths []uint16, baseStyle style.Style, isRowSelected bool, selectedCol int) {
 	col := inner.X
-	for i, cell := range cells {
-		if i >= len(colWidths) {
+	// colIdx 跟踪当前单元格起始的列下标，跨列单元格会推进多列。
+	colIdx := 0
+	for _, cell := range cells {
+		if colIdx >= len(colWidths) {
 			break
 		}
 
 		cellStyle := cell.style.Patch(baseStyle)
 
 		// Apply column highlight (highlight overrides base)
-		if isRowSelected && i == selectedCol {
+		if isRowSelected && colIdx == selectedCol {
 			cellStyle = cellStyle.Patch(t.cellHighlightStyle)
-		} else if i == selectedCol {
+		} else if colIdx == selectedCol {
 			cellStyle = cellStyle.Patch(t.columnHighlightStyle)
 		}
 
-		// Render cell content using text.Text for styled spans
-		maxW := colWidths[i]
+		// 计算 columnSpan：跨 N 列时累加列宽 + (N-1) 个间距
+		span := int(cell.columnSpan)
+		if span <= 1 {
+			span = 1
+		}
+		maxW := colWidths[colIdx]
+		for s := 1; s < span && colIdx+s < len(colWidths); s++ {
+			maxW += t.columnSpacing + colWidths[colIdx+s]
+		}
 		if col+maxW > inner.Right() {
 			maxW = inner.Right() - col
 		}
@@ -533,12 +544,13 @@ func (t Table) renderCellRow(buf *buffer.Buffer, inner layout.Rect, y uint16, ce
 		// Fill remaining cell width with spaces
 		contentDisplayWidth := uint16(cell.content.Width())
 		contentEnd := col + contentDisplayWidth
-		cellEnd := col + colWidths[i]
+		cellEnd := col + maxW
 		for x := contentEnd; x < cellEnd && x < inner.Right(); x++ {
 			buf.SetCell(x, y, " ", cellStyle)
 		}
 
-		col += colWidths[i] + t.columnSpacing
+		col += maxW + t.columnSpacing
+		colIdx += span
 	}
 }
 

@@ -1,6 +1,7 @@
 package widgets
 
 import (
+	"strings"
 	"unicode/utf8"
 
 	"github.com/rleecn/gugu/buffer"
@@ -22,6 +23,8 @@ type Input struct {
 	mask        bool            // if true, display '*' instead of actual characters
 	maskChar    string          // character to use for masking (default "*")
 	validator   func(rune) bool // if set, only runes that pass validation are accepted
+	maxLength   int             // 0 means unlimited
+	onSubmit    func(value string)
 }
 
 // NewInput creates a new Input widget.
@@ -101,6 +104,46 @@ func (i Input) SetValidator(fn func(rune) bool) Input {
 	return i
 }
 
+// SetMaxLength sets the maximum number of runes the input will accept.
+// 0 (default) means unlimited. Existing content longer than max is not truncated;
+// only future insertions are rejected once the limit is reached.
+func (i Input) SetMaxLength(n int) Input {
+	if n < 0 {
+		n = 0
+	}
+	i.maxLength = n
+	return i
+}
+
+// SetOnSubmit registers a callback invoked when Submit is called
+// (typically triggered by the Enter key in the containing application).
+// The callback receives the current input value.
+func (i Input) SetOnSubmit(fn func(value string)) Input {
+	i.onSubmit = fn
+	return i
+}
+
+// Submit triggers the on-submit callback if registered and returns whether
+// one was invoked. The widget itself never interprets keys; the host app
+// decides when Enter constitutes a submit and calls this method.
+func (i *Input) Submit() bool {
+	if i.onSubmit == nil {
+		return false
+	}
+	i.onSubmit(i.value)
+	return true
+}
+
+// runeCount returns the number of runes in the current value.
+func (i Input) runeCount() int {
+	return utf8.RuneCountInString(i.value)
+}
+
+// atMaxLength reports whether further insertions should be rejected.
+func (i Input) atMaxLength() bool {
+	return i.maxLength > 0 && i.runeCount() >= i.maxLength
+}
+
 // HasSelection returns true if there is a non-empty selection.
 func (i Input) HasSelection() bool {
 	return i.cursor != i.anchor
@@ -158,12 +201,21 @@ func (i *Input) MoveCursorRightSelect() {
 
 // InsertRune inserts a rune at the cursor position, replacing any selection.
 // If a validator is set and the rune does not pass validation, it is not inserted.
+// Insertions beyond SetMaxLength are silently rejected.
 func (i *Input) InsertRune(r rune) {
 	if i.validator != nil && !i.validator(r) {
 		return
 	}
+	// 计算替换后的 rune 数量，超额则拒绝
 	if i.HasSelection() {
+		// selection 将被删除，再插入 1 个 rune
+		after := i.runeCount() - i.selectionRuneCount() + 1
+		if i.maxLength > 0 && after > i.maxLength {
+			return
+		}
 		i.DeleteSelection()
+	} else if i.atMaxLength() {
+		return
 	}
 	str := string(r)
 	i.value = i.value[:i.cursor] + str + i.value[i.cursor:]
@@ -172,13 +224,45 @@ func (i *Input) InsertRune(r rune) {
 }
 
 // InsertString inserts a string at the cursor position, replacing any selection.
+// Insertions beyond SetMaxLength are truncated to fit.
 func (i *Input) InsertString(s string) {
+	if s == "" {
+		return
+	}
+	// 计算可插入的 rune 数量
+	remaining := -1
+	if i.maxLength > 0 {
+		current := i.runeCount()
+		if i.HasSelection() {
+			current -= i.selectionRuneCount()
+		}
+		remaining = i.maxLength - current
+		if remaining <= 0 {
+			return
+		}
+	}
+	if remaining >= 0 {
+		// 按 rune 截断到剩余配额
+		runes := []rune(s)
+		if len(runes) > remaining {
+			s = string(runes[:remaining])
+		}
+	}
 	if i.HasSelection() {
 		i.DeleteSelection()
 	}
 	i.value = i.value[:i.cursor] + s + i.value[i.cursor:]
 	i.cursor += len(s)
 	i.anchor = i.cursor
+}
+
+// selectionRuneCount returns the number of runes in the current selection.
+func (i Input) selectionRuneCount() int {
+	if !i.HasSelection() {
+		return 0
+	}
+	start, end := i.selectionRange()
+	return utf8.RuneCountInString(i.value[start:end])
 }
 
 // DeleteCharBack deletes the character before the cursor (backspace).
@@ -339,23 +423,28 @@ func (i Input) Render(area layout.Rect, buf *buffer.Buffer) {
 		usePlaceholder = true
 	}
 
+	// maskRuneWidth returns the display width of the mask character.
+	// 多字节 maskChar（例如 "•" 或 "中"）通过 utf8 解码首 rune，
+	// 避免 maskChar[0] 截断导致 RuneWidth 计算错误。
+	maskRuneWidth := 1
+	if i.mask && i.maskChar != "" {
+		if r, _ := utf8.DecodeRuneInString(i.maskChar); r != utf8.RuneError {
+			maskRuneWidth = buffer.RuneWidth(r)
+		}
+	}
+
 	// Apply mask if enabled (only for actual value, not placeholder)
 	if i.mask && !usePlaceholder {
-		masked := ""
-		for range display {
-			masked += i.maskChar
-		}
-		display = masked
+		// 使用 strings.Repeat 避免 O(n²) 字符串拼接
+		count := utf8.RuneCountInString(display)
+		display = strings.Repeat(i.maskChar, count)
 	}
 
 	// Calculate cursor position in display cells
 	cursorWidth := i.cursorDisplayWidth()
 	if i.mask {
-		// Recalculate for masked display
-		cursorWidth = 0
-		for range i.value[:i.cursor] {
-			cursorWidth += buffer.RuneWidth(rune(i.maskChar[0]))
-		}
+		// Recalculate for masked display: each rune contributes maskRuneWidth
+		cursorWidth = utf8.RuneCountInString(i.value[:i.cursor]) * maskRuneWidth
 	}
 
 	// Calculate scroll offset to keep cursor visible
@@ -378,8 +467,7 @@ func (i Input) Render(area layout.Rect, buf *buffer.Buffer) {
 	scrollByteOffset := 0
 	displayPos := 0
 	for scrollByteOffset < len(display) {
-		_, size := utf8.DecodeRuneInString(display[scrollByteOffset:])
-		r, _ := utf8.DecodeRuneInString(display[scrollByteOffset:])
+		r, size := utf8.DecodeRuneInString(display[scrollByteOffset:])
 		rw := buffer.RuneWidth(r)
 		if displayPos+rw > i.scroll {
 			break
@@ -397,17 +485,13 @@ func (i Input) Render(area layout.Rect, buf *buffer.Buffer) {
 	if i.HasSelection() && !usePlaceholder {
 		selStart, selEnd := i.selectionRange()
 		// Calculate display positions for selection
-		selStartDisplay := buffer.StringWidth(i.value[:selStart])
-		selEndDisplay := buffer.StringWidth(i.value[:selEnd])
+		var selStartDisplay, selEndDisplay int
 		if i.mask {
-			selStartDisplay = 0
-			for range i.value[:selStart] {
-				selStartDisplay += buffer.RuneWidth(rune(i.maskChar[0]))
-			}
-			selEndDisplay = selStartDisplay
-			for range i.value[selStart:selEnd] {
-				selEndDisplay += buffer.RuneWidth(rune(i.maskChar[0]))
-			}
+			selStartDisplay = utf8.RuneCountInString(i.value[:selStart]) * maskRuneWidth
+			selEndDisplay = utf8.RuneCountInString(i.value[:selEnd]) * maskRuneWidth
+		} else {
+			selStartDisplay = buffer.StringWidth(i.value[:selStart])
+			selEndDisplay = buffer.StringWidth(i.value[:selEnd])
 		}
 
 		// Convert to screen coordinates
@@ -438,9 +522,10 @@ func (i Input) Render(area layout.Rect, buf *buffer.Buffer) {
 		if cursorCol >= 0 && cursorCol < availWidth {
 			cell := buf.CellAt(inner.X+uint16(cursorCol), inner.Y)
 			if cell != nil {
-				if cell.WideChar {
+				if cell.WideChar && cursorCol > 0 {
 					// Cursor is on the hidden second half of a wide char.
 					// Highlight both cells of the wide character.
+					// cursorCol > 0 保护 uint16 下溢（首列不可能落在宽字符的从属格）。
 					cursorStyle := style.NewStyle().SetBg(style.White).SetFg(style.Black)
 					prevCell := buf.CellAt(inner.X+uint16(cursorCol)-1, inner.Y)
 					if prevCell != nil {

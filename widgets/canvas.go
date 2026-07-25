@@ -13,10 +13,16 @@ import (
 type Canvas struct {
 	block  Block
 	pixels map[[2]int]bool // (x, y) -> on/off, in pixel coordinates
-	dirty  bool
+	labels []canvasLabel   // 文本标签，在像素层之上叠加渲染
 	style  style.Style
-	width  int // pixel width (2 * cell width)
-	height int // pixel height (4 * cell height)
+}
+
+// canvasLabel 记录一个待渲染的文本标签。
+// x/y 为像素坐标（2x4 Braille 子单元网格），渲染时转换为 cell 坐标。
+type canvasLabel struct {
+	x, y  int
+	text  string
+	style style.Style
 }
 
 // NewCanvas creates a new Canvas widget.
@@ -44,13 +50,11 @@ func (c Canvas) SetStyle(s style.Style) Canvas {
 // Each terminal cell is 2 pixels wide and 4 pixels tall.
 func (c *Canvas) SetPixel(x, y int) {
 	c.pixels[[2]int{x, y}] = true
-	c.dirty = true
 }
 
 // ClearPixel clears a pixel at the given (x, y) coordinate.
 func (c *Canvas) ClearPixel(x, y int) {
 	delete(c.pixels, [2]int{x, y})
-	c.dirty = true
 }
 
 // TogglePixel toggles a pixel at the given (x, y) coordinate.
@@ -61,7 +65,6 @@ func (c *Canvas) TogglePixel(x, y int) {
 	} else {
 		c.pixels[key] = true
 	}
-	c.dirty = true
 }
 
 // GetPixel returns whether a pixel is set.
@@ -69,10 +72,10 @@ func (c Canvas) GetPixel(x, y int) bool {
 	return c.pixels[[2]int{x, y}]
 }
 
-// Clear clears all pixels.
+// Clear clears all pixels and labels.
 func (c *Canvas) Clear() {
 	c.pixels = make(map[[2]int]bool)
-	c.dirty = true
+	c.labels = nil
 }
 
 // DrawLine draws a line from (x0, y0) to (x1, y1) using Bresenham's algorithm.
@@ -155,6 +158,17 @@ func (c *Canvas) setCirclePoints(cx, cy, x, y int) {
 	c.SetPixel(cx-y, cy-x)
 }
 
+// Print 在像素坐标 (x, y) 处叠加一段文本标签。
+// 像素坐标按 2x4 Braille 子单元网格转换为 cell 坐标：
+// cell 列 = x/2，cell 行 = y/4。每个字符占据一个 cell（2 像素宽、4 像素高）。
+// 标签在 Render 末尾打印，覆盖对应 cell 的 Braille 像素结果。
+func (c *Canvas) Print(x, y int, s string, st style.Style) {
+	if s == "" {
+		return
+	}
+	c.labels = append(c.labels, canvasLabel{x: x, y: y, text: s, style: st})
+}
+
 // Render renders the canvas into the buffer using Braille characters.
 func (c Canvas) Render(area layout.Rect, buf *buffer.Buffer) {
 	if area.IsEmpty() {
@@ -218,6 +232,18 @@ func (c Canvas) Render(area layout.Rect, buf *buffer.Buffer) {
 				braille := symbols.BrailleDot(dots)
 				buf.SetString(inner.X+cellX, inner.Y+cellY, braille, c.style)
 			}
+		}
+	}
+
+	// 在 Braille 像素层之上叠加文本标签。
+	// 负坐标或越界坐标由 SetStringn 内部裁剪，不会 panic。
+	for _, lbl := range c.labels {
+		cellX := inner.X + uint16(lbl.x/2)
+		cellY := inner.Y + uint16(lbl.y/4)
+		// 仅当起点落在 inner 区域内才渲染，避免越界标签污染边界
+		if cellX < inner.Right() && cellY < inner.Bottom() {
+			remaining := inner.Right() - cellX
+			buf.SetStringn(cellX, cellY, lbl.text, remaining, lbl.style)
 		}
 	}
 }

@@ -1,8 +1,6 @@
 package buffer
 
 import (
-	"unicode/utf8"
-
 	"github.com/mattn/go-runewidth"
 	"github.com/rleecn/gugu/layout"
 	"github.com/rleecn/gugu/style"
@@ -75,11 +73,18 @@ func (b *Buffer) SetStringn(x, y uint16, s string, maxWidth uint16, sty style.St
 		w := uint16(RuneWidth(r))
 		if w == 0 {
 			// Zero-width character (combining marks, half-width katakana combining marks)
-			// Append to the previous cell's symbol if possible
-			if col > x {
-				prev := b.CellAt(col-1, y)
-				if prev != nil {
-					prev.Symbol += string(r)
+			// Append to the previous base cell's symbol. For wide chars, the immediate
+			// col-1 is the wide follower (WideChar=true, Symbol=""), so walk back to the
+			// first non-follower cell.
+			for target := col; target > x; {
+				target--
+				c := b.CellAt(target, y)
+				if c == nil {
+					break
+				}
+				if !c.WideChar {
+					c.Symbol += string(r)
+					break
 				}
 			}
 			continue
@@ -119,6 +124,19 @@ func (b *Buffer) SetLine(x, y uint16, s string, sty style.Style) {
 		}
 		w := uint16(runewidth.RuneWidth(r))
 		if w == 0 {
+			// Zero-width character: attach to previous base cell, mirroring SetStringn
+			// semantics so combining marks are not silently dropped across line wraps.
+			for target := col; target > x; {
+				target--
+				c := b.CellAt(target, y)
+				if c == nil {
+					break
+				}
+				if !c.WideChar {
+					c.Symbol += string(r)
+					break
+				}
+			}
 			continue
 		}
 		if col+w > b.Area.Right() {
@@ -176,9 +194,17 @@ type CellDiff struct {
 }
 
 // Diff computes the differences between two buffers.
+// 每次调用都会分配新的切片；高频渲染场景应优先使用 DiffInto 复用底层数组。
 func (b *Buffer) Diff(previous *Buffer) []CellDiff {
+	return b.DiffInto(previous, nil)
+}
+
+// DiffInto computes the differences between two buffers, appending to dst
+// and returning the resulting slice. 传入 dst[:0] 可复用底层容量，避免每帧分配。
+// dst 为 nil 时等价于 Diff。
+func (b *Buffer) DiffInto(previous *Buffer, dst []CellDiff) []CellDiff {
 	if previous == nil {
-		diffs := make([]CellDiff, 0, len(b.Content))
+		diffs := dst
 		for y := b.Area.Y; y < b.Area.Bottom(); y++ {
 			for x := b.Area.X; x < b.Area.Right(); x++ {
 				cell := b.CellAt(x, y)
@@ -190,7 +216,7 @@ func (b *Buffer) Diff(previous *Buffer) []CellDiff {
 		return diffs
 	}
 
-	var diffs []CellDiff
+	diffs := dst
 	minW := b.Area.Width
 	minH := b.Area.Height
 	if previous.Area.Width < minW {
@@ -313,12 +339,21 @@ func StringWidth(s string) int {
 // RuneWidth returns the display width of a rune in terminal cells.
 // Handles half-width katakana combining marks (U+FF9E, U+FF9F) as width 0
 // since they combine with the preceding character in some terminals.
+//
+// Box Drawing (U+2500–U+257F), Block Elements (U+2580–U+259F), and Geometric
+// Shapes (U+25A0–U+25FF) are forced to width 1 because go-runewidth treats
+// them as ambiguous-width (width 2) under CJK locale, but all modern terminal
+// emulators consistently render them as single-width.
 func RuneWidth(r rune) int {
 	// Half-width katakana combining marks: U+FF9E (半浊音) and U+FF9F (浊音)
 	// These are combining marks that should be treated as width 0
 	// because they visually combine with the preceding katakana character.
 	if r == 0xFF9E || r == 0xFF9F {
 		return 0
+	}
+	// Box Drawing, Block Elements, Geometric Shapes — 现代终端均为宽度 1
+	if (r >= 0x2500 && r <= 0x257F) || (r >= 0x2580 && r <= 0x259F) || (r >= 0x25A0 && r <= 0x25FF) {
+		return 1
 	}
 	return runewidth.RuneWidth(r)
 }
@@ -342,6 +377,3 @@ func isRuneStart(s string, i int) bool {
 	}
 	return s[i]&0xC0 != 0x80
 }
-
-// unused import guard
-var _ = utf8.RuneCountInString

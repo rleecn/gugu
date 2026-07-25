@@ -454,7 +454,7 @@ items := []widgets.ListItem{
     widgets.NewListItem("Item 2").SetStyle(style.NewStyle().SetFg(style.Yellow)),
 }
 
-list := widgets.NewList(items...).
+list := widgets.NewList(items).
     SetBlock(block).
     SetHighlightStyle(style.NewStyle().SetBg(style.DarkGray).SetFg(style.White)).
     SetHighlightSymbol("▶ ").
@@ -542,19 +542,21 @@ gauge := widgets.NewGauge().
 lg := widgets.NewLineGauge().
     SetRatio(0.6).
     SetLabel("60%").
-    SetLineSet(widgets.ThickLineSet).
-    SetGaugeStyle(style.NewStyle().SetFg(style.Green))
+    SetLineSet(widgets.ThickLineSet).               // 默认 ThickLineSet（━ / ╺）
+    SetFilledStyle(style.NewStyle().SetFg(style.Green)).
+    SetUnfilledStyle(style.NewStyle().SetFg(style.DarkGray))
 ```
+
+预定义 LineSet：`NormalLineSet`（─ / ╴）、`ThickLineSet`（━ / ╺，默认）、`DoubleLineSet`（═ / ═）、`LightLineSet`（─ / ─）。
 
 ### BarChart
 
 ```go
-chart := widgets.NewBarChart().
-    SetData(
-        widgets.BarData{Label: "Mon", Value: 42},
-        widgets.BarData{Label: "Tue", Value: 56},
-    ).
+chart := widgets.NewBarChart([]int{42, 56, 38, 72}).
+    SetLabels([]string{"Mon", "Tue", "Wed", "Thu"}).
     SetBarStyle(style.NewStyle().SetFg(style.Green)).
+    SetValueStyle(style.NewStyle().SetFg(style.White)).
+    SetLabelStyle(style.NewStyle().SetFg(style.Gray)).
     SetBarWidth(10).
     SetBarGap(2).
     SetMax(100)
@@ -563,38 +565,41 @@ chart := widgets.NewBarChart().
 ### Chart (Line/Scatter)
 
 ```go
+// Dataset 的 data 为 [x0, y0, x1, y1, ...] 交替排列的 float64 切片
 chart := widgets.NewChart().
-    SetData(
-        widgets.ChartData{
-            Name:  "Series 1",
-            Style: style.NewStyle().SetFg(style.Red),
-            Data:  []widgets.DataPoint{{X: 0, Y: 1}, {X: 1, Y: 3}},
-        },
-    ).
-    SetXAxis(widgets.Axis{Title: "X", Bounds: [2]float64{0, 10}}).
-    SetYAxis(widgets.Axis{Title: "Y", Bounds: [2]float64{0, 10}}).
+    AddDataset(widgets.NewDataset([]float64{0, 1, 1, 3, 2, 2}).
+        SetName("Series 1").
+        SetStyle(style.NewStyle().SetFg(style.Red)).
+        SetChartType(widgets.ChartLine)).  // or ChartScatter, ChartBar
+    SetXAxis(widgets.NewAxis().SetTitle("X").SetBounds(0, 10)).
+    SetYAxis(widgets.NewAxis().SetTitle("Y").SetBounds(0, 10)).
     SetLegendPosition(widgets.LegendTopLeft)
 ```
 
 ### Canvas (Pixel Drawing)
 
+Canvas 使用 Braille 字符实现子单元精度（每 cell 2x4 像素）。所有绘制方法使用 `SetStyle` 设置的统一样式。
+
 ```go
 canvas := widgets.NewCanvas().
     SetBlock(block).
-    SetMarker(widgets.MarkerBraille)  // or MarkerDot, MarkerBlock
+    SetStyle(style.NewStyle().SetFg(style.Green))
 
-canvas.DrawLine(0, 0, 10, 10, style.NewStyle().SetFg(style.Red))
-canvas.DrawRect(2, 2, 8, 8, style.NewStyle().SetFg(style.Green))
-canvas.DrawCircle(5, 5, 3, style.NewStyle().SetFg(style.Blue))
-canvas.Print(0, 0, "Label", style.NewStyle().SetFg(style.White))
+// 像素坐标：x 范围 [0, width*2)，y 范围 [0, height*4)
+canvas.DrawLine(0, 0, 10, 10)
+canvas.DrawRect(2, 2, 8, 8)
+canvas.DrawCircle(5, 5, 3)
+canvas.Print(0, 0, "Label", style.NewStyle().SetFg(style.White))  // 在像素层之上叠加文本
 ```
 
 ### Scrollbar (Stateful)
 
 ```go
-scrollbar := widgets.NewScrollbar(widgets.ScrollbarVertical).
-    SetStyle(style.NewStyle().SetFg(style.Gray)).
-    SetThumbStyle(style.NewStyle().SetFg(style.White))
+scrollbar := widgets.NewScrollbar(widgets.ScrollbarVerticalRight).
+    SetTrackStyle(style.NewStyle().SetFg(style.Gray)).
+    SetThumbStyle(style.NewStyle().SetFg(style.White)).
+    SetBeginStyle(style.NewStyle().SetFg(style.Cyan)).
+    SetEndStyle(style.NewStyle().SetFg(style.Cyan))
 
 state := widgets.NewScrollbarState(100, 20, 0)  // (total, viewport, position)
 frame.RenderStateful(scrollbar, area, state)
@@ -603,11 +608,12 @@ frame.RenderStateful(scrollbar, area, state)
 ### Sparkline
 
 ```go
-spark := widgets.NewSparkline().
-    SetData([]uint64{1, 3, 5, 2, 8, 4, 6}).
+spark := widgets.NewSparkline([]int{1, 3, 5, 2, 8, 4, 6}).
     SetStyle(style.NewStyle().SetFg(style.Green)).
-    SetMax(10)
+    SetEmptyStyle(style.NewStyle().SetFg(style.DarkGray))  // 零值/负值样式
 ```
+
+Sparkline 自动从数据中计算最大值，无需手动设置；每个数据点占一个 cell。
 
 ### Calendar
 
@@ -666,6 +672,117 @@ backend := terminal.NewTestBackend(80, 24)
 backend.AssertBuffer(expected)
 cell := backend.Cell(x, y)
 ```
+
+## Program (Elm Architecture)
+
+`program` 包提供应用框架：Program + 事件循环 + Cmd/Msg + Option 系统。
+用户实现 `Model` 接口后调 `Run()` 即可，无需手写信号/stdin/resize 样板。
+
+### Model 接口
+
+```go
+type Model interface {
+    Init() Cmd
+    Update(msg Msg) (Model, Cmd)
+    View(frame *terminal.Frame, area layout.Rect)  // 直接渲染到 frame，保留 gugu buffer 直绘优势
+}
+```
+
+### 运行 Program
+
+```go
+backend := terminal.NewNativeBackend()
+p := program.NewProgram(model, backend,
+    program.WithAltScreen(),
+    program.WithMouseCellMotion(),
+    program.WithBracketedPaste(),
+    program.WithReportFocus(),
+    program.WithFPS(60),
+    program.WithColorProfile(colorprofile.Detect()),
+)
+p.Run()
+```
+
+### Options
+
+`WithAltScreen`、`WithMouseCellMotion`、`WithMouseAllMotion`、`WithBracketedPaste`、
+`WithReportFocus`、`WithFPS`、`WithInput`、`WithOutput`、`WithRenderer`、
+`WithFilter`、`WithInline(height)`、`WithColorProfile`、`WithoutSignalHandler`、
+`WithoutCatchPanics`。
+
+### 内置 Msg
+
+`KeyMsg`、`MouseMsg`、`WindowSizeMsg`、`FocusMsg`、`BlurMsg`、`PasteMsg`、
+`QuitMsg`、`ClearMsg`、`ErrorMsg`、`TickMsg`。
+
+自定义 Msg：嵌入 `program.EmbedMsg` 即获得 `Msg` 接口实现：
+
+```go
+type DownloadDoneMsg struct {
+    program.EmbedMsg
+    Percent int
+}
+```
+
+### 内置 Cmd
+
+```go
+program.Quit                // 请求退出
+program.Batch(c1, c2, c3)   // 并发执行
+program.Sequence(c1, c2)    // 顺序执行
+program.Tick(d)             // d 后发 TickMsg
+program.Every(d)            // 周期性 TickMsg（需在 Update 内重新调度）
+program.Send(msg)           // 包装 Msg 为 Cmd
+program.Print(args...)     // 打到 stderr（调试）
+```
+
+### 跨 goroutine 通信
+
+```go
+go func() {
+    // 任意 goroutine 可向主循环发 Msg
+    p.Send(MyMsg{...})
+}()
+```
+
+### StringModel 适配器
+
+不想直接操作 buffer 的简单场景可实现 `StringModel`（`View() string`），
+通过 `program.NewStringAdaptor(m)` 包装为 `Model`。
+
+## ColorProfile
+
+`colorprofile` 包根据环境变量自动检测终端颜色能力并降级：
+
+```go
+profile := colorprofile.Detect()  // Ascii | ANSI | ANSI256 | TrueColor
+profile.Downgrade(colorprofile.ANSI)
+profile.String()  // "TrueColor" 等
+```
+
+支持 NO_COLOR 协议、COLORTERM=truecolor、TERM=*-256color、TERM=dumb 等检测。
+
+## Terminal 扩展能力
+
+`terminal` 包通过可选接口断言扩展 backend 能力（不修改主 `Backend` 接口）：
+
+```go
+// 检测 backend 是否支持
+if cap, ok := backend.(terminal.BracketedPasteCapable); ok {
+    _ = cap.EnableBracketedPaste()
+}
+
+// 所有可选能力：
+//   AltScreenCapable       — 运行时切换 alt screen
+//   BracketedPasteCapable  — 启用/禁用 bracketed paste
+//   FocusReportingCapable  — 启用/禁用焦点上报
+//   WindowTitleCapable     — 设置窗口标题 (OSC 2)
+//   ClipboardCapable      — 读写剪贴板 (OSC 52)
+//   CursorStyleCapable    — 切换光标样式 (DECSCUSR)
+```
+
+`AnsiBackend` 与 `NativeBackend` 已实现所有可选能力；`TestBackend` 不实现，
+Program 检测到不支持时会优雅跳过。
 
 ## Important Notes
 

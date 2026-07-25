@@ -88,6 +88,8 @@ func (s ListState) Offset() int {
 }
 
 // SetOffset sets the scroll offset.
+// 负值归零；上限由 Render 时 calculateScrollOffset 根据实际 items 数量纠正，
+// 因为 ListState 本身不持有 items 列表，无法在此处感知最大可滚动位置。
 func (s *ListState) SetOffset(o int) {
 	s.offset = o
 	if s.offset < 0 {
@@ -101,6 +103,7 @@ func (s ListState) Selected() int {
 }
 
 // SetSelected sets the selected index.
+// 负值归零；上限由调用方根据 items 数量保证，或在 Render 时被纠正。
 func (s *ListState) SetSelected(i int) {
 	s.selected = i
 	if s.selected < 0 {
@@ -108,9 +111,15 @@ func (s *ListState) SetSelected(i int) {
 	}
 }
 
+// Select sets the selected index. 与 SetSelected 等价，提供 AGENTS.md 文档约定的别名。
+func (s *ListState) Select(i int) {
+	s.SetSelected(i)
+}
+
 // SelectNext moves selection to the next item.
+// total 为 items 总数；total <= 0 时直接返回避免无意义状态变更。
 func (s *ListState) SelectNext(total int) {
-	if total == 0 {
+	if total <= 0 {
 		return
 	}
 	s.selected++
@@ -122,6 +131,33 @@ func (s *ListState) SelectNext(total int) {
 // SelectPrevious moves selection to the previous item.
 func (s *ListState) SelectPrevious() {
 	s.selected--
+	if s.selected < 0 {
+		s.selected = 0
+	}
+}
+
+// SelectNextPage moves selection forward by pageSize items, clamped to [0, total-1].
+// 用于 PageDown 等键绑定。pageSize <= 0 时按 1 步进。
+func (s *ListState) SelectNextPage(pageSize, total int) {
+	if total <= 0 {
+		return
+	}
+	if pageSize <= 0 {
+		pageSize = 1
+	}
+	s.selected += pageSize
+	if s.selected >= total {
+		s.selected = total - 1
+	}
+}
+
+// SelectPreviousPage moves selection backward by pageSize items, clamped to [0, total-1].
+// 用于 PageUp 等键绑定。pageSize <= 0 时按 1 步进。
+func (s *ListState) SelectPreviousPage(pageSize int) {
+	if pageSize <= 0 {
+		pageSize = 1
+	}
+	s.selected -= pageSize
 	if s.selected < 0 {
 		s.selected = 0
 	}
@@ -230,6 +266,12 @@ func (l List) SetSelected(i int) List {
 // Selected returns the current selected index.
 func (l List) Selected() int {
 	return l.state.Selected()
+}
+
+// Len returns the number of items in the list.
+// 配合 ListState 的 SelectNext/SelectLast 等 total 参数使用，避免调用方维护额外计数。
+func (l List) Len() int {
+	return len(l.items)
 }
 
 // State returns a copy of the current list state.
@@ -422,6 +464,8 @@ func (l List) renderWithState(area layout.Rect, buf *buffer.Buffer, state *ListS
 
 // calculateScrollOffset calculates the scroll offset to keep the selected item visible.
 // It properly handles multi-line items and scroll_padding.
+// 注意：state.offset 可能被外部 SetOffset 设置为超出 items 范围的值，
+// 此处必须先 clamp 到 [0, len(itemHeights)-1] 再访问 itemStartRow，避免越界 panic。
 func (l List) calculateScrollOffset(inner layout.Rect, itemHeights []int, state *ListState) int {
 	if len(l.items) == 0 {
 		return 0
@@ -440,6 +484,18 @@ func (l List) calculateScrollOffset(inner layout.Rect, itemHeights []int, state 
 		selected = 0
 	}
 
+	// Clamp offset 到合法范围，防止外部 SetOffset 设大后越界访问 itemStartRow。
+	// itemStartRow 长度为 len(itemHeights)+1，offset 最大合法值为 len(itemHeights)，
+	// 但 offset == len(itemHeights) 表示"指向末尾之后"，等价于指向最后一个 item，
+	// 直接 clamp 到 len(itemHeights)-1 与渲染语义一致。
+	offset := state.offset
+	if offset >= len(itemHeights) {
+		offset = len(itemHeights) - 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
 	// itemStartRow[i] = the starting row (0-based) of item i
 	itemStartRow := make([]int, len(itemHeights)+1)
 	for i, h := range itemHeights {
@@ -451,7 +507,7 @@ func (l List) calculateScrollOffset(inner layout.Rect, itemHeights []int, state 
 	selectedEnd := itemStartRow[selected+1]
 
 	// Current visible range: [viewStart, viewEnd) in row coordinates
-	viewStart := itemStartRow[state.offset]
+	viewStart := itemStartRow[offset]
 	viewEnd := viewStart + maxHeight
 
 	// Apply scroll_padding: we want at least `padding` rows of context
@@ -545,5 +601,7 @@ func (l List) calculateScrollOffset(inner layout.Rect, itemHeights []int, state 
 		return newOffset
 	}
 
-	return state.offset
+	// selected 已在可见范围内且 padding 满足，无需调整。
+	// 返回 clamp 后的 offset，避免外部 SetOffset 越界值透传到渲染层。
+	return offset
 }

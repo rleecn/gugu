@@ -94,7 +94,7 @@ items := []widgets.ListItem{
     widgets.NewListItem("项目 2").SetStyle(style.NewStyle().SetFg(style.Yellow)),
 }
 
-list := widgets.NewList(items...).
+list := widgets.NewList(items).
     SetBlock(block).
     SetHighlightStyle(style.NewStyle().SetBg(style.DarkGray).SetFg(style.White)).
     SetHighlightSymbol("▶ ").
@@ -110,15 +110,16 @@ frame.RenderStateful(list, area, state)
 
 ```go
 state := widgets.NewListState()
-state.Select(3)              // 选择索引 3 的项目
-state.SelectLast()           // 选择最后一个项目
-state.SelectFirst()          // 选择第一个项目
-state.SelectNext()           // 选择下一个
-state.SelectPrevious()       // 选择上一个
-state.SelectNextPage()       // 向下翻页选择
-state.SelectPreviousPage()   // 向上翻页选择
-state.Selected()             // (index, bool)
-state.Len()                  // 总项目数
+state.Select(3)                        // 选择索引 3 的项目
+state.SelectLast(total)                // 选择最后一个项目（total = list.Len()）
+state.SelectFirst()                    // 选择第一个项目
+state.SelectNext(total)                // 选择下一个
+state.SelectPrevious()                 // 选择上一个
+state.SelectNextPage(pageSize, total)  // 向下翻页选择
+state.SelectPreviousPage(pageSize)     // 向上翻页选择
+state.Selected()                       // 返回选中索引（int）
+state.Offset()                         // 当前滚动偏移
+list.Len()                             // 总项目数（在 List 上，非 ListState）
 ```
 
 ### 列表方向
@@ -252,21 +253,20 @@ gauge := widgets.NewGauge().
 lg := widgets.NewLineGauge().
     SetRatio(0.6).
     SetLabel("60%").
-    SetLineSet(widgets.ThickLineSet).
-    SetGaugeStyle(style.NewStyle().SetFg(style.Green))
+    SetLineSet(widgets.ThickLineSet).               // 默认 ThickLineSet（━ / ╺）
+    SetFilledStyle(style.NewStyle().SetFg(style.Green)).
+    SetUnfilledStyle(style.NewStyle().SetFg(style.DarkGray))
 ```
+
+预定义 LineSet：`NormalLineSet`（─ / ╴）、`ThickLineSet`（━ / ╺，默认）、`DoubleLineSet`（═ / ═）、`LightLineSet`（─ / ─）。
 
 ## BarChart
 
 带标签和数值的垂直柱状图。
 
 ```go
-chart := widgets.NewBarChart().
-    SetData(
-        widgets.BarData{Label: "周一", Value: 42},
-        widgets.BarData{Label: "周二", Value: 56},
-        widgets.BarData{Label: "周三", Value: 38},
-    ).
+chart := widgets.NewBarChart([]int{42, 56, 38}).
+    SetLabels([]string{"周一", "周二", "周三"}).
     SetBarStyle(style.NewStyle().SetFg(style.Green)).
     SetValueStyle(style.NewStyle().SetFg(style.White)).
     SetLabelStyle(style.NewStyle().SetFg(style.Gray)).
@@ -280,33 +280,31 @@ chart := widgets.NewBarChart().
 带坐标轴和图例的折线图和散点图。
 
 ```go
+// Dataset 的 data 为 [x0, y0, x1, y1, ...] 交替排列的 float64 切片
 chart := widgets.NewChart().
-    SetData(
-        widgets.ChartData{
-            Name:  "系列 1",
-            Style: style.NewStyle().SetFg(style.Red),
-            Data:  []widgets.DataPoint{{X: 0, Y: 1}, {X: 1, Y: 3}},
-        },
-    ).
-    SetXAxis(widgets.Axis{Title: "X", Bounds: [2]float64{0, 10}}).
-    SetYAxis(widgets.Axis{Title: "Y", Bounds: [2]float64{0, 10}}).
+    AddDataset(widgets.NewDataset([]float64{0, 1, 1, 3, 2, 2}).
+        SetName("系列 1").
+        SetStyle(style.NewStyle().SetFg(style.Red)).
+        SetChartType(widgets.ChartLine)).  // 或 ChartScatter、ChartBar
+    SetXAxis(widgets.NewAxis().SetTitle("X").SetBounds(0, 10)).
+    SetYAxis(widgets.NewAxis().SetTitle("Y").SetBounds(0, 10)).
     SetLegendPosition(widgets.LegendTopLeft)
 ```
 
 ## Canvas
 
-基于 Braille 的像素级绘图，支持线、矩形和圆。
+基于 Braille 的像素级绘图，支持线、矩形和圆。每个终端单元格表示 2x4 的 Braille 点阵。所有绘制方法使用 `SetStyle` 设置的统一样式。
 
 ```go
 canvas := widgets.NewCanvas().
     SetBlock(block).
-    SetMarker(widgets.MarkerBraille)  // 或 MarkerDot、MarkerBlock
+    SetStyle(style.NewStyle().SetFg(style.Green))
 
-// 绘制图形
-canvas.DrawLine(0, 0, 10, 10, style.NewStyle().SetFg(style.Red))
-canvas.DrawRect(2, 2, 8, 8, style.NewStyle().SetFg(style.Green))
-canvas.DrawCircle(5, 5, 3, style.NewStyle().SetFg(style.Blue))
-canvas.Print(0, 0, "标签", style.NewStyle().SetFg(style.White))
+// 像素坐标：x 范围 [0, width*2)，y 范围 [0, height*4)
+canvas.DrawLine(0, 0, 10, 10)
+canvas.DrawRect(2, 2, 8, 8)
+canvas.DrawCircle(5, 5, 3)
+canvas.Print(0, 0, "标签", style.NewStyle().SetFg(style.White))  // 在像素层之上叠加文本
 ```
 
 ## Scrollbar
@@ -314,25 +312,26 @@ canvas.Print(0, 0, "标签", style.NewStyle().SetFg(style.White))
 垂直或水平滚动条。**有状态组件。**
 
 ```go
-scrollbar := widgets.NewScrollbar(widgets.ScrollbarVertical).
-    SetStyle(style.NewStyle().SetFg(style.Gray)).
+scrollbar := widgets.NewScrollbar(widgets.ScrollbarVerticalRight).
+    SetTrackStyle(style.NewStyle().SetFg(style.Gray)).
     SetThumbStyle(style.NewStyle().SetFg(style.White)).
-    SetThumbSymbol('█').
-    SetTrackSymbol('│')
+    SetBeginStyle(style.NewStyle().SetFg(style.Cyan)).
+    SetEndStyle(style.NewStyle().SetFg(style.Cyan))
 
 state := widgets.NewScrollbarState(100, 20, 0)  // (总数, 视口, 位置)
 frame.RenderStateful(scrollbar, area, state)
 ```
 
+方向常量：`ScrollbarVerticalRight`、`ScrollbarVerticalLeft`、`ScrollbarHorizontalBottom`、`ScrollbarHorizontalTop`。
+
 ## Sparkline
 
-迷你内联图表，用于显示趋势。
+迷你内联图表，用于显示趋势。自动从数据中计算最大值，每个数据点占一个单元格。
 
 ```go
-spark := widgets.NewSparkline().
-    SetData([]uint64{1, 3, 5, 2, 8, 4, 6}).
+spark := widgets.NewSparkline([]int{1, 3, 5, 2, 8, 4, 6}).
     SetStyle(style.NewStyle().SetFg(style.Green)).
-    SetMax(10)
+    SetEmptyStyle(style.NewStyle().SetFg(style.DarkGray))  // 零值/负值样式
 ```
 
 ## Calendar

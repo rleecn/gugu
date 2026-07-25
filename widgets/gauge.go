@@ -9,6 +9,30 @@ import (
 	"github.com/rleecn/gugu/text"
 )
 
+// gaugePartialBlocks 用于 Gauge 的 Unicode 子单元精度填充，
+// 从细到粗依次为 ▏▎▍▌▋▊▉。提升为包级常量避免每次 Render 重新分配切片。
+var gaugePartialBlocks = []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉"}
+
+// LineSet 定义 LineGauge 的线条字符集（填充段 + 未填充段）。
+// 与 AGENTS.md 中 widgets.ThickLineSet 等预定义集合对应。
+type LineSet struct {
+	Filled   string
+	Unfilled string
+}
+
+// 预定义 LineSet。Filled 表示已填充段字符，Unfilled 表示未填充段字符。
+// 选择遵循 Unicode box drawing 规范，未填充段使用左侧细线（╴）保留视觉连续性。
+var (
+	// NormalLineSet 使用普通线 ─ / ╴。
+	NormalLineSet = LineSet{Filled: "─", Unfilled: "╴"}
+	// ThickLineSet 使用粗线 ━ / ╺（LineGauge 默认，与历史渲染一致）。
+	ThickLineSet = LineSet{Filled: "━", Unfilled: "╺"}
+	// DoubleLineSet 使用双线 ═ / ═。
+	DoubleLineSet = LineSet{Filled: "═", Unfilled: "═"}
+	// LightLineSet 使用细线 ─ / ─。
+	LightLineSet = LineSet{Filled: "─", Unfilled: "─"}
+)
+
 // Gauge displays a progress bar with an optional label.
 //
 // The gauge is filled proportionally based on the ratio of current/total.
@@ -135,18 +159,17 @@ func (g Gauge) Render(area layout.Rect, buf *buffer.Buffer) {
 	// Handle partial fill with Unicode block characters
 	if g.useUnicode && filledWidth < int(inner.Width) {
 		partialRatio := float64(inner.Width)*g.ratio - float64(filledWidth)
-		if partialRatio > 0 && filledWidth < int(inner.Width) {
-			// Use Unicode block elements: ▏▎▍▌▋▊▉█
-			blocks := []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉"}
-			idx := int(partialRatio * float64(len(blocks)))
-			if idx >= len(blocks) {
-				idx = len(blocks) - 1
+		if partialRatio > 0 {
+			// Use Unicode block elements: ▏▎▍▌▋▊▉（gaugePartialBlocks 为包级常量）
+			idx := int(partialRatio * float64(len(gaugePartialBlocks)))
+			if idx >= len(gaugePartialBlocks) {
+				idx = len(gaugePartialBlocks) - 1
 			}
 			if idx > 0 {
 				x := inner.X + uint16(filledWidth)
 				cell := buf.CellAt(x, inner.Y)
 				if cell != nil {
-					cell.Symbol = blocks[idx]
+					cell.Symbol = gaugePartialBlocks[idx]
 					cell.SetStyle(g.gaugeStyle)
 					cell.WideChar = false
 				}
@@ -159,10 +182,7 @@ func (g Gauge) Render(area layout.Rect, buf *buffer.Buffer) {
 		labelWidth := g.label.Width()
 		if labelWidth > 0 {
 			// Center the label
-			startCol := int(inner.X) + (int(inner.Width)-labelWidth)/2
-			if startCol < int(inner.X) {
-				startCol = int(inner.X)
-			}
+			startCol := max(int(inner.X)+(int(inner.Width)-labelWidth)/2, int(inner.X))
 			maxWidth := int(inner.Right()) - startCol
 			if maxWidth <= 0 {
 				return
@@ -206,10 +226,12 @@ type LineGauge struct {
 	lineStyle     style.Style
 	filledStyle   style.Style
 	unfilledStyle style.Style
+	lineSet       LineSet
 	label         text.Line
 }
 
 // NewLineGauge creates a new LineGauge with 0% progress.
+// 默认使用 ThickLineSet（━ / ╺），与历史渲染行为保持一致。
 func NewLineGauge() LineGauge {
 	return LineGauge{
 		block:         NoBlock(),
@@ -217,6 +239,7 @@ func NewLineGauge() LineGauge {
 		lineStyle:     style.NewStyle(),
 		filledStyle:   style.NewStyle().SetFg(style.Green),
 		unfilledStyle: style.NewStyle().SetFg(style.DarkGray),
+		lineSet:       ThickLineSet,
 		label:         text.NewLine(),
 	}
 }
@@ -266,6 +289,19 @@ func (g LineGauge) SetFilledStyle(s style.Style) LineGauge {
 // SetUnfilledStyle sets the style for the unfilled portion.
 func (g LineGauge) SetUnfilledStyle(s style.Style) LineGauge {
 	g.unfilledStyle = s
+	return g
+}
+
+// SetLineSet sets the line character set used for the filled and unfilled portions.
+// 默认为 ThickLineSet（━ / ╺）。传入空 Filled 或 Unfilled 时回退到默认字符以保证视觉可见。
+func (g LineGauge) SetLineSet(set LineSet) LineGauge {
+	if set.Filled == "" {
+		set.Filled = ThickLineSet.Filled
+	}
+	if set.Unfilled == "" {
+		set.Unfilled = ThickLineSet.Unfilled
+	}
+	g.lineSet = set
 	return g
 }
 
@@ -343,11 +379,11 @@ func (g LineGauge) Render(area layout.Rect, buf *buffer.Buffer) {
 		}
 		offset := int(x - inner.X)
 		if offset < filledWidth {
-			cell.Symbol = "━"
+			cell.Symbol = g.lineSet.Filled
 			cell.SetStyle(g.filledStyle)
 			cell.WideChar = false
 		} else {
-			cell.Symbol = "╺"
+			cell.Symbol = g.lineSet.Unfilled
 			cell.SetStyle(g.unfilledStyle)
 			cell.WideChar = false
 		}

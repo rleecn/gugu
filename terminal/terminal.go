@@ -9,9 +9,12 @@ import (
 
 // Terminal manages the terminal state with double buffering.
 type Terminal struct {
-	backend      Backend
-	current      buffer.Buffer
-	previous     buffer.Buffer
+	backend  Backend
+	current  buffer.Buffer
+	previous buffer.Buffer
+	// diffs 复用 diff 切片底层容量，避免每帧 render 分配。
+	// 仅在 Draw 中读写，渲染路径由 Renderer mutex 串行化，无需额外同步。
+	diffs        []buffer.CellDiff
 	viewport     layout.Rect
 	cursorX      uint16
 	cursorY      uint16
@@ -113,19 +116,19 @@ func (t *Terminal) Viewport() layout.Rect {
 }
 
 // Draw renders the current buffer to the terminal by computing diffs.
+// 采用双缓冲交换 + 原地 Clear 复用底层 Cell 数组，避免每帧 NewBuffer 分配；
+// diff 结果写入 t.diffs 复用容量，避免每帧切片分配。
 func (t *Terminal) Draw() error {
-	diffs := t.current.Diff(&t.previous)
-	if len(diffs) > 0 {
-		if err := t.backend.Draw(diffs); err != nil {
+	t.diffs = t.current.DiffInto(&t.previous, t.diffs[:0])
+	if len(t.diffs) > 0 {
+		if err := t.backend.Draw(t.diffs); err != nil {
 			return err
 		}
 	}
-	// Swap buffers
-	t.previous = t.current
-	// Create a new empty buffer for next frame.
-	// Each render pass starts fresh — widgets must render everything they want visible.
-	// The diff mechanism ensures only changed cells are written to the terminal.
-	t.current = buffer.NewBuffer(t.viewport)
+	// Swap buffers: 旧的 current（刚渲染的帧）成为 previous，旧 previous 被清空后作为新 current。
+	// 仅交换值（slice header 拷贝），底层 Cell 数组原地复用，Clear 复位每个 cell。
+	t.previous, t.current = t.current, t.previous
+	t.current.Clear()
 
 	// Handle cursor
 	if t.cursorHidden {
@@ -186,20 +189,19 @@ func (t *Terminal) DisableRawMode() error {
 // down by the given number of lines and allows rendering new content
 // in the newly created space.
 func (t *Terminal) InsertBefore(lines uint16) error {
-	if !t.inline {
+	if !t.inline || lines == 0 {
 		return nil
 	}
-	// In inline mode, we move the cursor up and insert blank lines
-	// to make room for new content above the viewport.
-	// This uses the CSI Ps L (Insert Lines) sequence.
-	if lines > 0 {
-		if err := t.backend.Flush(); err != nil {
-			return err
-		}
-		// Move cursor to top of viewport and insert lines
-		_, _ = t.backend.(interface{ Write([]byte) (int, error) }).Write([]byte(
-			fmt.Sprintf("\x1b[%d;%dH\x1b[%dL", t.viewport.Y+1, t.viewport.X+1, lines),
-		))
+	raw, ok := t.backend.(RawWriter)
+	if !ok {
+		return fmt.Errorf("terminal: backend does not support raw write (RawWriter)")
 	}
-	return nil
+	if err := t.backend.Flush(); err != nil {
+		return err
+	}
+	// Move cursor to top of viewport and insert blank lines (CSI Ps L).
+	// fmt.Appendf 复用栈上缓冲，避免 []byte(fmt.Sprintf(...)) 的二次分配。
+	seq := fmt.Appendf(nil, "\x1b[%d;%dH\x1b[%dL", t.viewport.Y+1, t.viewport.X+1, lines)
+	_, err := raw.WriteRaw(seq)
+	return err
 }

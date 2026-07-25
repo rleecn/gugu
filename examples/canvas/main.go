@@ -155,7 +155,7 @@ func draw(term *terminal.Terminal) {
 		}
 	}
 
-	canvas.Render(areas[1], frame.Buffer())
+	frame.RenderWidget(canvas, areas[1])
 
 	// Help
 	helpBlock := widgets.NewBlock().

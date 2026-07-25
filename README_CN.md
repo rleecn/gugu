@@ -25,6 +25,10 @@ Gugu 提供了一套完整的工具来构建丰富的终端应用：布局系统
 - **OSC 8 超链接** - 可点击的终端超链接
 - **Serde 支持** - Style、Color、Modifier 的 JSON 序列化
 - **测试工具** - TestBackend 和缓冲区断言辅助工具
+- **Program 框架** - Elm 架构（Model/Update/View/Cmd/Msg），内置事件循环、信号处理、SIGWINCH 自动调整大小、panic 恢复、FPS 节流、跨 goroutine `p.Send`，以及 Batch/Sequence/Tick/Every 命令
+- **ProgramOption 系统** - WithAltScreen / WithMouseCellMotion / WithBracketedPaste / WithReportFocus / WithFPS / WithFilter / WithColorProfile / WithoutSignalHandler 等
+- **ColorProfile 检测** - 自动根据 NO_COLOR / COLORTERM / TERM 检测终端颜色能力并优雅降级到 ASCII / ANSI / ANSI256 / TrueColor
+- **现代终端特性** - 运行时 AltScreen 切换、bracketed paste 事件、焦点/失焦事件、OSC 8 超链接、OSC 52 剪贴板、DECSCUSR 光标样式、OSC 2 窗口标题 — 均通过可选 backend 能力接口按需启用
 
 ## 快速开始
 
@@ -260,8 +264,16 @@ term, _ := terminal.NewFixed(backend, 10, 5, 40, 20)
 - `style/` - 颜色、修饰符和调色板演示
 - `canvas/` - Braille 绘图演示
 - `chart/` - 折线图和散点图演示
+- `barchart/` - 柱状图多组对比演示
+- `sparkline/` - 迷你内联 sparkline 图表演示
 - `input/` - 支持 UTF-8 和选择的文本输入演示
 - `calendar/` - 月历演示
+- `program/` - Program 框架（Elm 架构）演示，包含 Tick 和跨 goroutine `Send`
+- `progress/` - 通过 `p.Send` 由后台任务驱动的进度条演示
+- `spinner/` - 基于 `Tick` 的简单 spinner 演示
+- `textarea/` - 多行文本编辑器，演示光标移动、换行与滚动
+- `http/` - 异步 HTTP 客户端，演示 Cmd/Msg + spinner + 状态机
+- `file-picker/` - 文件浏览器，通过 List + ListState 演示目录导航
 
 ## 运行示例
 

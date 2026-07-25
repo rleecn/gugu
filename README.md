@@ -25,6 +25,10 @@ Gugu provides a complete set of tools for building rich terminal applications: l
 - **OSC 8 Hyperlinks** - Clickable terminal hyperlinks
 - **Serde Support** - JSON serialization for Style, Color, Modifier
 - **Test Utilities** - TestBackend and buffer assertion helpers
+- **Program Framework** - Elm Architecture (Model/Update/View/Cmd/Msg) with built-in event loop, signal handling, SIGWINCH auto-resize, panic recovery, FPS throttling, cross-goroutine `p.Send`, and Batch/Sequence/Tick/Every commands
+- **ProgramOption System** - WithAltScreen / WithMouseCellMotion / WithBracketedPaste / WithReportFocus / WithFPS / WithFilter / WithColorProfile / WithoutSignalHandler and more
+- **ColorProfile Detection** - Automatic NO_COLOR / COLORTERM / TERM-based capability detection with graceful downgrade to ASCII / ANSI / ANSI256 / TrueColor
+- **Modern Terminal Features** - Runtime AltScreen switching, bracketed paste events, focus/blur events, OSC 8 hyperlinks, OSC 52 clipboard, DECSCUSR cursor styles, OSC 2 window title — all via opt-in optional backend capability interfaces
 
 ## Quick Start
 
@@ -260,8 +264,16 @@ See the [examples](examples/) directory:
 - `style/` - Colors, modifiers, and palettes demo
 - `canvas/` - Braille drawing demo
 - `chart/` - Line chart and scatter plot demo
+- `barchart/` - Bar chart with multi-group comparison demo
+- `sparkline/` - Mini inline sparkline charts demo
 - `input/` - Text input with UTF-8 and selection demo
 - `calendar/` - Monthly calendar demo
+- `program/` - Program framework (Elm architecture) demo with Tick and cross-goroutine `Send`
+- `progress/` - Progress bar driven by a background task via `p.Send`
+- `spinner/` - Simple spinner built with `Tick`
+- `textarea/` - Multi-line text editor with cursor movement, line splitting, and scrolling
+- `http/` - Async HTTP client demonstrating Cmd/Msg with spinner and status machine
+- `file-picker/` - File browser with directory navigation via List widget and ListState
 
 ## Running Examples
 

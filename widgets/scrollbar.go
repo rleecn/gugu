@@ -104,11 +104,16 @@ type ScrollbarState struct {
 	viewportContentLength int
 }
 
-// NewScrollbarState creates a new ScrollbarState with the given content length.
-func NewScrollbarState(contentLength int) ScrollbarState {
-	return ScrollbarState{
-		contentLength: contentLength,
+// NewScrollbarState creates a new ScrollbarState with the given content length,
+// viewport content length, and initial position.
+// contentLength 为可滚动内容总数；viewportContentLength 为可视区域能容纳的条目数
+// （传 0 时渲染时回退为 track 长度）；position 为初始滚动位置（越界自动 clamp）。
+func NewScrollbarState(contentLength, viewportContentLength, position int) ScrollbarState {
+	s := ScrollbarState{
+		contentLength:         contentLength,
+		viewportContentLength: viewportContentLength,
 	}
+	return s.SetPosition(position)
 }
 
 // IsState implements terminal.State marker interface.

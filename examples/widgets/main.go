@@ -280,9 +280,7 @@ func drawScrollbarTab(frame *terminal.Frame, area layout.Rect, state *DemoState)
 	scrollbarBlock.Render(areas[1], frame.Buffer())
 	inner := scrollbarBlock.Inner(areas[1])
 
-	scrollbarState := widgets.NewScrollbarState(100).
-		SetPosition(state.scrollPos).
-		SetViewportContentLength(int(inner.Height))
+	scrollbarState := widgets.NewScrollbarState(100, int(inner.Height), state.scrollPos)
 
 	scrollbar := widgets.NewScrollbar(widgets.ScrollbarVerticalRight).
 		SetThumbStyle(style.NewStyle().SetBg(style.Blue).SetFg(style.Blue)).

@@ -127,11 +127,11 @@ sty := sty.ResetStyle()  // Reset all
 ### Querying
 
 ```go
-sty.Fg()              // Get foreground (Color, bool)
-sty.Bg()              // Get background (Color, bool)
-sty.UnderlineColor()  // Get underline color (Color, bool)
-sty.AddModifier()     // Get added modifiers
-sty.SubModifier()     // Get subtracted modifiers
+sty.FgColor()          // Get foreground (Color, bool)
+sty.BgColor()          // Get background (Color, bool)
+sty.UlColor()          // Get underline color (Color, bool)
+sty.GetAddModifier()   // Get added modifiers
+sty.GetSubModifier()   // Get subtracted modifiers
 ```
 
 ### Patching

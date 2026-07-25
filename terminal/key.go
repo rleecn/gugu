@@ -8,6 +8,18 @@ type KeyEvent struct {
 	Modifiers KeyModifier
 	// Text contains the UTF-8 text for character input (empty for special keys).
 	Text string
+	// Release is true when the key is released (Kitty keyboard protocol event_type=3).
+	// Always false for non-Kitty input.
+	Release bool
+	// Super is true when the Super/Win key is held (Kitty keyboard protocol).
+	// Always false for non-Kitty input.
+	Super bool
+	// CapsLock is true when CapsLock is active (Kitty keyboard protocol).
+	// Always false for non-Kitty input.
+	CapsLock bool
+	// NumLock is true when NumLock is active (Kitty keyboard protocol).
+	// Always false for non-Kitty input.
+	NumLock bool
 }
 
 // KeyCode identifies a physical or logical key.
@@ -56,10 +68,11 @@ const (
 type KeyModifier int
 
 const (
-	ModNone    KeyModifier = 0
-	ModShift   KeyModifier = 1 << iota
+	ModNone  KeyModifier = 0
+	ModShift KeyModifier = 1 << iota
 	ModAlt
 	ModCtrl
+	ModSuper
 )
 
 // HasShift returns true if Shift is held.

@@ -3,9 +3,7 @@
 package terminal
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"syscall"
 	"time"
 	"unsafe"
@@ -87,54 +85,14 @@ func (b *CrossBackend) DisableRawMode() error {
 	return nil
 }
 
-// Clear clears the terminal screen.
-func (b *CrossBackend) Clear() error {
-	cmd := exec.Command("clear")
-	cmd.Stdout = os.Stdout
-	return cmd.Run()
-}
+// Clear 继承 AnsiBackend.Clear 的实现（直接写 ANSI \x1b[H\x1b[2J）。
+// 不再覆盖为 exec.Command("clear")，避免每次清屏 fork 子进程的开销与潜在副作用。
 
-// GetCursorPosition returns the current cursor position using DSR.
+// GetCursorPosition 返回当前光标位置 (x=col, y=row, 0-based)。
+// 通过 DSR (ESC[6n) 请求并由 queryCursorPositionViaDSR 使用 unix.Poll 带
+// 超时读取响应，避免老实现 goroutine + 阻塞 Read 在超时后泄漏的问题。
 func (b *CrossBackend) GetCursorPosition() (uint16, uint16, error) {
-	if _, err := os.Stdout.Write([]byte("\x1b[6n")); err != nil {
-		return 0, 0, fmt.Errorf("failed to send DSR: %w", err)
-	}
-	os.Stdout.Sync()
-
-	response := make([]byte, 32)
-	var n int
-	var err error
-
-	done := make(chan struct{})
-	go func() {
-		n, err = os.Stdin.Read(response)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		return 0, 0, fmt.Errorf("timeout waiting for cursor position response")
-	}
-
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to read DSR response: %w", err)
-	}
-
-	resp := string(response[:n])
-	var row, col uint16
-	if _, err := fmt.Sscanf(resp, "\x1b[%d;%dR", &row, &col); err != nil {
-		return 0, 0, fmt.Errorf("failed to parse cursor position: %w", err)
-	}
-
-	if row > 0 {
-		row--
-	}
-	if col > 0 {
-		col--
-	}
-
-	return col, row, nil
+	return queryCursorPositionViaDSR(100 * time.Millisecond)
 }
 
 func unixTerminalSize() (uint16, uint16, error) {
@@ -156,5 +114,8 @@ func unixTerminalSize() (uint16, uint16, error) {
 	return ws.Col, ws.Row, nil
 }
 
-// Ensure interface is satisfied
-var _ Backend = (*CrossBackend)(nil)
+// Ensure interfaces are satisfied
+var (
+	_ Backend   = (*CrossBackend)(nil)
+	_ RawWriter = (*CrossBackend)(nil)
+)

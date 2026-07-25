@@ -94,7 +94,7 @@ items := []widgets.ListItem{
     widgets.NewListItem("Item 2").SetStyle(style.NewStyle().SetFg(style.Yellow)),
 }
 
-list := widgets.NewList(items...).
+list := widgets.NewList(items).
     SetBlock(block).
     SetHighlightStyle(style.NewStyle().SetBg(style.DarkGray).SetFg(style.White)).
     SetHighlightSymbol("▶ ").
@@ -110,15 +110,16 @@ frame.RenderStateful(list, area, state)
 
 ```go
 state := widgets.NewListState()
-state.Select(3)              // Select item at index 3
-state.SelectLast()           // Select last item
-state.SelectFirst()          // Select first item
-state.SelectNext()           // Move selection down
-state.SelectPrevious()       // Move selection up
-state.SelectNextPage()       // Move selection down by page
-state.SelectPreviousPage()   // Move selection up by page
-state.Selected()             // (index, bool)
-state.Len()                  // Total items
+state.Select(3)                    // Select item at index 3
+state.SelectLast(total)            // Select last item (total = list.Len())
+state.SelectFirst()                // Select first item
+state.SelectNext(total)            // Move selection down
+state.SelectPrevious()             // Move selection up
+state.SelectNextPage(pageSize, total)  // Move selection down by page
+state.SelectPreviousPage(pageSize)     // Move selection up by page
+state.Selected()                   // Returns selected index (int)
+state.Offset()                     // Current scroll offset
+list.Len()                         // Total items (on List, not ListState)
 ```
 
 ### List Direction
@@ -252,21 +253,20 @@ Thin line progress indicator.
 lg := widgets.NewLineGauge().
     SetRatio(0.6).
     SetLabel("60%").
-    SetLineSet(widgets.ThickLineSet).
-    SetGaugeStyle(style.NewStyle().SetFg(style.Green))
+    SetLineSet(widgets.ThickLineSet).               // Default: ThickLineSet (━ / ╺)
+    SetFilledStyle(style.NewStyle().SetFg(style.Green)).
+    SetUnfilledStyle(style.NewStyle().SetFg(style.DarkGray))
 ```
+
+Predefined LineSet: `NormalLineSet` (─ / ╴), `ThickLineSet` (━ / ╺, default), `DoubleLineSet` (═ / ═), `LightLineSet` (─ / ─).
 
 ## BarChart
 
 Vertical bar chart with labels and values.
 
 ```go
-chart := widgets.NewBarChart().
-    SetData(
-        widgets.BarData{Label: "Mon", Value: 42},
-        widgets.BarData{Label: "Tue", Value: 56},
-        widgets.BarData{Label: "Wed", Value: 38},
-    ).
+chart := widgets.NewBarChart([]int{42, 56, 38}).
+    SetLabels([]string{"Mon", "Tue", "Wed"}).
     SetBarStyle(style.NewStyle().SetFg(style.Green)).
     SetValueStyle(style.NewStyle().SetFg(style.White)).
     SetLabelStyle(style.NewStyle().SetFg(style.Gray)).
@@ -280,33 +280,31 @@ chart := widgets.NewBarChart().
 Line chart and scatter plot with axes and legend.
 
 ```go
+// Dataset data is [x0, y0, x1, y1, ...] interleaved float64 slice
 chart := widgets.NewChart().
-    SetData(
-        widgets.ChartData{
-            Name:  "Series 1",
-            Style: style.NewStyle().SetFg(style.Red),
-            Data:  []widgets.DataPoint{{X: 0, Y: 1}, {X: 1, Y: 3}},
-        },
-    ).
-    SetXAxis(widgets.Axis{Title: "X", Bounds: [2]float64{0, 10}}).
-    SetYAxis(widgets.Axis{Title: "Y", Bounds: [2]float64{0, 10}}).
+    AddDataset(widgets.NewDataset([]float64{0, 1, 1, 3, 2, 2}).
+        SetName("Series 1").
+        SetStyle(style.NewStyle().SetFg(style.Red)).
+        SetChartType(widgets.ChartLine)).  // or ChartScatter, ChartBar
+    SetXAxis(widgets.NewAxis().SetTitle("X").SetBounds(0, 10)).
+    SetYAxis(widgets.NewAxis().SetTitle("Y").SetBounds(0, 10)).
     SetLegendPosition(widgets.LegendTopLeft)
 ```
 
 ## Canvas
 
-Braille-based pixel-level drawing for lines, rectangles, and circles.
+Braille-based pixel-level drawing for lines, rectangles, and circles. Each terminal cell represents a 2x4 grid of Braille dots. All draw methods use the style set via `SetStyle`.
 
 ```go
 canvas := widgets.NewCanvas().
     SetBlock(block).
-    SetMarker(widgets.MarkerBraille)  // or MarkerDot, MarkerBlock
+    SetStyle(style.NewStyle().SetFg(style.Green))
 
-// Draw shapes
-canvas.DrawLine(0, 0, 10, 10, style.NewStyle().SetFg(style.Red))
-canvas.DrawRect(2, 2, 8, 8, style.NewStyle().SetFg(style.Green))
-canvas.DrawCircle(5, 5, 3, style.NewStyle().SetFg(style.Blue))
-canvas.Print(0, 0, "Label", style.NewStyle().SetFg(style.White))
+// Pixel coordinates: x in [0, width*2), y in [0, height*4)
+canvas.DrawLine(0, 0, 10, 10)
+canvas.DrawRect(2, 2, 8, 8)
+canvas.DrawCircle(5, 5, 3)
+canvas.Print(0, 0, "Label", style.NewStyle().SetFg(style.White))  // Overlay text on pixel layer
 ```
 
 ## Scrollbar
@@ -314,25 +312,26 @@ canvas.Print(0, 0, "Label", style.NewStyle().SetFg(style.White))
 Vertical or horizontal scrollbar. **Stateful widget.**
 
 ```go
-scrollbar := widgets.NewScrollbar(widgets.ScrollbarVertical).
-    SetStyle(style.NewStyle().SetFg(style.Gray)).
+scrollbar := widgets.NewScrollbar(widgets.ScrollbarVerticalRight).
+    SetTrackStyle(style.NewStyle().SetFg(style.Gray)).
     SetThumbStyle(style.NewStyle().SetFg(style.White)).
-    SetThumbSymbol('█').
-    SetTrackSymbol('│')
+    SetBeginStyle(style.NewStyle().SetFg(style.Cyan)).
+    SetEndStyle(style.NewStyle().SetFg(style.Cyan))
 
 state := widgets.NewScrollbarState(100, 20, 0)  // (total, viewport, position)
 frame.RenderStateful(scrollbar, area, state)
 ```
 
+Orientations: `ScrollbarVerticalRight`, `ScrollbarVerticalLeft`, `ScrollbarHorizontalBottom`, `ScrollbarHorizontalTop`.
+
 ## Sparkline
 
-Mini inline chart for showing trends.
+Mini inline chart for showing trends. Auto-calculates max from data; each data point occupies one cell.
 
 ```go
-spark := widgets.NewSparkline().
-    SetData([]uint64{1, 3, 5, 2, 8, 4, 6}).
+spark := widgets.NewSparkline([]int{1, 3, 5, 2, 8, 4, 6}).
     SetStyle(style.NewStyle().SetFg(style.Green)).
-    SetMax(10)
+    SetEmptyStyle(style.NewStyle().SetFg(style.DarkGray))  // Zero/negative values
 ```
 
 ## Calendar

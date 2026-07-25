@@ -127,11 +127,11 @@ sty := sty.ResetStyle()  // 重置所有
 ### 查询
 
 ```go
-sty.Fg()              // 获取前景色 (Color, bool)
-sty.Bg()              // 获取背景色 (Color, bool)
-sty.UnderlineColor()  // 获取下划线颜色 (Color, bool)
-sty.AddModifier()     // 获取已添加的修饰符
-sty.SubModifier()     // 获取已移除的修饰符
+sty.FgColor()          // 获取前景色 (Color, bool)
+sty.BgColor()          // 获取背景色 (Color, bool)
+sty.UlColor()          // 获取下划线颜色 (Color, bool)
+sty.GetAddModifier()   // 获取已添加的修饰符
+sty.GetSubModifier()   // 获取已移除的修饰符
 ```
 
 ### 补丁

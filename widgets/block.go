@@ -193,9 +193,12 @@ func (b Block) SetTitleStyle(s style.Style) Block {
 	return b
 }
 
-// SetTitleAlignment sets the title alignment.
+// SetTitleAlignment sets the title alignment for all titles.
 func (b Block) SetTitleAlignment(a TitleAlignment) Block {
 	b.titleAlign = a
+	for i := range b.titles {
+		b.titles[i].alignment = a
+	}
 	return b
 }
 

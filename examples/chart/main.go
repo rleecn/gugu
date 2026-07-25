@@ -127,7 +127,7 @@ func draw(term *terminal.Terminal) {
 		SetBarGap(2).
 		SetMax(100)
 
-	barChart.Render(contentAreas[0], frame.Buffer())
+	frame.RenderWidget(barChart, contentAreas[0])
 
 	// Line Chart
 	lineBlock := widgets.NewBlock().
@@ -165,7 +165,7 @@ func draw(term *terminal.Terminal) {
 		SetYAxis(widgets.NewAxis().SetBounds(0, 60).SetTitle("Value")).
 		SetLegendPosition(widgets.LegendTopLeft)
 
-	lineChart.Render(contentAreas[1], frame.Buffer())
+	frame.RenderWidget(lineChart, contentAreas[1])
 
 	// Help
 	helpBlock := widgets.NewBlock().

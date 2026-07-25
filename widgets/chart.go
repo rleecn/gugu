@@ -110,6 +110,14 @@ func (b BarChart) Render(area layout.Rect, buf *buffer.Buffer) {
 		return
 	}
 
+	// 健壮性：barWidth / barGap 必须为正，否则跳过渲染避免下标异常
+	if b.barWidth <= 0 {
+		b.barWidth = 1
+	}
+	if b.barGap < 0 {
+		b.barGap = 0
+	}
+
 	// Calculate max value
 	maxVal := b.max
 	if maxVal == 0 {
@@ -119,7 +127,7 @@ func (b BarChart) Render(area layout.Rect, buf *buffer.Buffer) {
 			}
 		}
 	}
-	if maxVal == 0 {
+	if maxVal <= 0 {
 		return
 	}
 
@@ -130,6 +138,10 @@ func (b BarChart) Render(area layout.Rect, buf *buffer.Buffer) {
 	}
 
 	barSyms := symbols.Bars()
+	if len(barSyms) == 0 {
+		return
+	}
+	fullBarSym := barSyms[len(barSyms)-1]
 
 	// Render each bar
 	for i, val := range b.data {
@@ -138,10 +150,13 @@ func (b BarChart) Render(area layout.Rect, buf *buffer.Buffer) {
 			break
 		}
 
-		// Calculate bar height in cells
-		barHeight := int(float64(val) / float64(maxVal) * float64(chartHeight))
-		if barHeight > chartHeight {
-			barHeight = chartHeight
+		// Calculate bar height in cells. 负值按 0 处理，避免溢出图表区域。
+		barHeight := 0
+		if val > 0 {
+			barHeight = int(float64(val) / float64(maxVal) * float64(chartHeight))
+			if barHeight > chartHeight {
+				barHeight = chartHeight
+			}
 		}
 
 		// Render bar from bottom up
@@ -156,7 +171,7 @@ func (b BarChart) Render(area layout.Rect, buf *buffer.Buffer) {
 					break
 				}
 				if row < barHeight {
-					buf.SetString(uint16(x), uint16(y), barSyms[len(barSyms)-1], b.barStyle)
+					buf.SetString(uint16(x), uint16(y), fullBarSym, b.barStyle)
 				}
 			}
 		}
@@ -173,8 +188,13 @@ func (b BarChart) Render(area layout.Rect, buf *buffer.Buffer) {
 		// Render label below bar
 		if i < len(b.labels) {
 			label := b.labels[i]
-			if len(label) > b.barWidth {
-				label = label[:b.barWidth]
+			// 截断前先以显示宽度比较，避免 b.barWidth 为 0 时切片 panic
+			if w := buffer.StringWidth(label); w > b.barWidth {
+				// 按显示宽度截断；简化为按 rune 长度截断到 b.barWidth
+				runes := []rune(label)
+				if len(runes) > b.barWidth {
+					label = string(runes[:b.barWidth])
+				}
 			}
 			x := uint16(barStart)
 			if x < inner.Right() {
@@ -236,6 +256,10 @@ func (s Sparkline) Render(area layout.Rect, buf *buffer.Buffer) {
 	}
 
 	barSyms := symbols.Bars()
+	if len(barSyms) == 0 {
+		return
+	}
+	maxLevel := len(barSyms) - 1
 
 	// Render one character per data point
 	for i, val := range s.data {
@@ -244,10 +268,16 @@ func (s Sparkline) Render(area layout.Rect, buf *buffer.Buffer) {
 			break
 		}
 
-		// Map value to bar level (0-8)
-		level := int(float64(val) / float64(maxVal) * float64(len(barSyms)-1))
-		if level >= len(barSyms) {
-			level = len(barSyms) - 1
+		// Map value to bar level (0..maxLevel). 负值按 0 处理。
+		level := 0
+		if val > 0 {
+			level = int(float64(val) / float64(maxVal) * float64(maxLevel))
+			if level > maxLevel {
+				level = maxLevel
+			}
+			if level < 0 {
+				level = 0
+			}
 		}
 
 		sym := barSyms[level]
@@ -513,13 +543,6 @@ func (c Chart) Render(area layout.Rect, buf *buffer.Buffer) {
 	if !c.hideLegend && len(c.datasets) > 0 {
 		renderLegend(buf, inner, c.datasets, c.legendStyle, c.legendPos)
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // dataBounds returns the (min, max) across all datasets for the given dimension (0=x, 1=y).

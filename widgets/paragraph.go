@@ -2,6 +2,7 @@ package widgets
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/rleecn/gugu/buffer"
 	"github.com/rleecn/gugu/layout"
@@ -228,75 +229,6 @@ func trimLineLeadingSpaces(line text.Line) text.Line {
 	return text.NewLine(spans[startIdx:]...)
 }
 
-// wrapLineWord wraps a text.Line by word boundaries, respecting display width.
-func wrapLineWord(line text.Line, maxWidth int) []text.Line {
-	// Flatten the line to a string for word wrapping, preserving spans
-	plainText := line.String()
-	words := strings.Fields(plainText)
-
-	if len(words) == 0 {
-		return []text.Line{line}
-	}
-
-	var result []text.Line
-	var currentSpans []text.Span
-	currentWidth := 0
-
-	for _, word := range words {
-		wordWidth := buffer.StringWidth(word)
-		spaceWidth := 0
-		if len(currentSpans) > 0 {
-			spaceWidth = 1
-		}
-
-		if currentWidth+spaceWidth+wordWidth > maxWidth && currentWidth > 0 {
-			result = append(result, text.NewLine(currentSpans...))
-			currentSpans = []text.Span{text.NewSpan(word)}
-			currentWidth = wordWidth
-		} else {
-			if len(currentSpans) > 0 {
-				currentSpans = append(currentSpans, text.NewSpan(" "))
-				currentWidth += spaceWidth
-			}
-			currentSpans = append(currentSpans, text.NewSpan(word))
-			currentWidth += wordWidth
-		}
-	}
-
-	if len(currentSpans) > 0 {
-		result = append(result, text.NewLine(currentSpans...))
-	}
-
-	return result
-}
-
-// wrapLineChar wraps a text.Line by character boundaries, respecting display width.
-func wrapLineChar(line text.Line, maxWidth int) []text.Line {
-	var result []text.Line
-	var currentSpans []text.Span
-	currentWidth := 0
-
-	for _, span := range line.Spans() {
-		spanStyle := span.Style()
-		for _, r := range span.Content() {
-			rw := buffer.RuneWidth(r)
-			if currentWidth+rw > maxWidth && currentWidth > 0 {
-				result = append(result, text.NewLine(currentSpans...))
-				currentSpans = nil
-				currentWidth = 0
-			}
-			currentSpans = append(currentSpans, text.NewSpan(string(r)).SetStyle(spanStyle))
-			currentWidth += rw
-		}
-	}
-
-	if len(currentSpans) > 0 {
-		result = append(result, text.NewLine(currentSpans...))
-	}
-
-	return result
-}
-
 // wrapLineGrapheme wraps a text.Line by grapheme cluster boundaries,
 // respecting display width. This is more accurate than rune-based wrapping
 // because it keeps combining marks together with their base characters.
@@ -480,7 +412,7 @@ func (p Paragraph) Render(area layout.Rect, buf *buffer.Buffer) {
 			skipBytes := 0
 			skipWidth := 0
 			for skipBytes < len(plainLine) {
-				r, size := utf8DecodeRuneInString(plainLine[skipBytes:])
+				r, size := utf8.DecodeRuneInString(plainLine[skipBytes:])
 				rw := buffer.RuneWidth(r)
 				if skipWidth+rw > int(p.scrollX) {
 					break
@@ -500,12 +432,4 @@ func (p Paragraph) Render(area layout.Rect, buf *buffer.Buffer) {
 			text.RenderLine(buf, xStart, row, maxWidth, line, p.style)
 		}
 	}
-}
-
-// utf8DecodeRuneInString is a local helper to decode a rune.
-func utf8DecodeRuneInString(s string) (rune, int) {
-	for i, r := range s {
-		return r, i + len(string(r))
-	}
-	return 0, 0
 }
