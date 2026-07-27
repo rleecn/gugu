@@ -212,6 +212,13 @@ func (p *Program) Run() (finalMsg Msg, err error) {
 	for {
 		select {
 		case msg := <-p.msgCh:
+			// 窗口尺寸变化：先同步 Terminal 双缓冲尺寸，再进入过滤/派发流程。
+			// Resize 重建 current/previous 为新尺寸的空 buffer，
+			// 下一帧 Draw 的 diff 会输出全部单元格，实现全量重绘，避免界面错乱。
+			// 放在 filter 之前，确保即使调用方过滤掉 WindowSizeMsg，buffer 仍与新尺寸一致。
+			if _, ok := msg.(WindowSizeMsg); ok {
+				_ = p.terminal.Resize()
+			}
 			// 过滤
 			if p.filter != nil {
 				msg = p.filter(msg)
@@ -347,10 +354,12 @@ func (p *Program) resumeTerminal() error {
 }
 
 // renderOnce 调用 Model.View 渲染并 flush 到终端。
+// Model 可通过 frame.SetCursor 设置光标位置，渲染后由 ApplyCursor 应用到 Terminal。
 func (p *Program) renderOnce() error {
 	frame := terminal.NewFrame(p.terminal)
 	area := frame.Area()
 	p.model.View(frame, area)
+	frame.ApplyCursor()
 	return p.renderer.Render()
 }
 
@@ -397,6 +406,11 @@ func (p *Program) cleanup() {
 	p.quitOnce.Do(func() { close(p.quitCh) })
 
 	_ = p.backend.ShowCursor(0, 0)
+	// 恢复终端默认光标形状：widget 可能通过 Frame.SetCursorStyle 切换为竖条，
+	// 若异常退出或正常 Quit 时不还原，终端会残留竖条光标。
+	if p.cursorStyleCap != nil {
+		_ = p.cursorStyleCap.SetCursorStyle(terminal.CursorStyleDefault)
+	}
 	if p.reportFocus && p.focusReportingCap != nil {
 		_ = p.focusReportingCap.DisableFocusReporting()
 	}

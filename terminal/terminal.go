@@ -92,16 +92,26 @@ func (t *Terminal) Size() (uint16, uint16, error) {
 	return t.backend.Size()
 }
 
-// Resize resizes the terminal buffers.
+// Resize resizes the terminal buffers to match the current backend size.
+// 当尺寸实际变化时，物理清屏并重置双缓冲，避免窗口缩小后旧内容残留在
+// 新 viewport 之外（diff 渲染只覆盖新尺寸范围，无法清除外部残留）。
 func (t *Terminal) Resize() error {
 	w, h, err := t.backend.Size()
 	if err != nil {
 		return err
 	}
-	area := layout.Rect{Width: w, Height: h}
-	t.viewport = area
-	t.current.Resize(area)
-	t.previous.Resize(area)
+	newArea := layout.Rect{Width: w, Height: h}
+	// 尺寸未变：无需重置，避免每帧 Resize 调用导致不必要的全量重绘。
+	if newArea == t.viewport {
+		return nil
+	}
+	// 物理清屏：清除终端上旧尺寸残留的边框与内容。
+	if err := t.backend.Clear(); err != nil {
+		return err
+	}
+	t.viewport = newArea
+	t.current.Resize(newArea)
+	t.previous.Resize(newArea)
 	return nil
 }
 
@@ -162,6 +172,14 @@ func (t *Terminal) SetCursor(x, y uint16) {
 // HideCursor hides the cursor.
 func (t *Terminal) HideCursor() {
 	t.cursorHidden = true
+}
+
+// SetCursorStyle 切换终端光标形状（DECSCUSR）。backend 不支持时静默忽略。
+// 进入编辑模式时设为竖条（bar），退出时恢复默认。
+func (t *Terminal) SetCursorStyle(style CursorStyle) {
+	if cap, ok := t.backend.(CursorStyleCapable); ok {
+		_ = cap.SetCursorStyle(style)
+	}
 }
 
 // EnterAlternateScreen enters the alternate screen buffer.

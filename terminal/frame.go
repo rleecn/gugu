@@ -46,6 +46,23 @@ func (f *Frame) SetCursor(x, y uint16) {
 	f.hasCursor = true
 }
 
+// SetCursorStyle 切换终端光标形状（DECSCUSR）。backend 不支持时静默忽略。
+// 调用方在每帧 View 中按需设置：编辑模式设竖条，浏览模式恢复默认块状。
+// 立即写入 backend（不走 buffer diff），因为光标形状属于终端全局状态而非单元格属性。
+func (f *Frame) SetCursorStyle(style CursorStyle) {
+	f.terminal.SetCursorStyle(style)
+}
+
+// ApplyCursor 将 Frame 上通过 SetCursor 设置的光标位置应用到 Terminal。
+// 若本帧未调用 SetCursor，则隐藏光标（保持 widget 渲染期间光标不可见）。
+func (f *Frame) ApplyCursor() {
+	if !f.hasCursor {
+		f.terminal.HideCursor()
+		return
+	}
+	f.terminal.SetCursor(f.cursorX, f.cursorY)
+}
+
 // Widget is the interface for all widgets.
 type Widget interface {
 	Render(area layout.Rect, buf *buffer.Buffer)
