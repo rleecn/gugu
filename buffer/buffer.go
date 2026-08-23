@@ -76,7 +76,9 @@ func (b *Buffer) SetStringn(x, y uint16, s string, maxWidth uint16, sty style.St
 			// Append to the previous base cell's symbol. For wide chars, the immediate
 			// col-1 is the wide follower (WideChar=true, Symbol=""), so walk back to the
 			// first non-follower cell.
-			for target := col; target > x; {
+			// 回退不限于本次调用的起点 x：Span 边界可能恰好切在 base 字符与
+			// combining mark 之间（RenderLine 逐 Span 渲染），限制在 x 会静默丢字。
+			for target := col; target > b.Area.X; {
 				target--
 				c := b.CellAt(target, y)
 				if c == nil {
@@ -122,11 +124,11 @@ func (b *Buffer) SetLine(x, y uint16, s string, sty style.Style) {
 			col = x
 			continue
 		}
-		w := uint16(runewidth.RuneWidth(r))
+		w := uint16(RuneWidth(r))
 		if w == 0 {
 			// Zero-width character: attach to previous base cell, mirroring SetStringn
 			// semantics so combining marks are not silently dropped across line wraps.
-			for target := col; target > x; {
+			for target := col; target > b.Area.X; {
 				target--
 				c := b.CellAt(target, y)
 				if c == nil {
@@ -202,13 +204,15 @@ func (b *Buffer) Diff(previous *Buffer) []CellDiff {
 // DiffInto computes the differences between two buffers, appending to dst
 // and returning the resulting slice. 传入 dst[:0] 可复用底层容量，避免每帧分配。
 // dst 为 nil 时等价于 Diff。
+// 宽字符 follower cell（WideChar=true）跳过：leader 输出后终端自动覆盖
+// follower 区域，backend 同样会忽略它们，进入 diffs 只浪费拷贝。
 func (b *Buffer) DiffInto(previous *Buffer, dst []CellDiff) []CellDiff {
 	if previous == nil {
 		diffs := dst
 		for y := b.Area.Y; y < b.Area.Bottom(); y++ {
 			for x := b.Area.X; x < b.Area.Right(); x++ {
 				cell := b.CellAt(x, y)
-				if cell != nil && !cell.Skip {
+				if cell != nil && !cell.Skip && !cell.WideChar {
 					diffs = append(diffs, CellDiff{X: x, Y: y, Cell: *cell})
 				}
 			}
@@ -226,6 +230,26 @@ func (b *Buffer) DiffInto(previous *Buffer, dst []CellDiff) []CellDiff {
 		minH = previous.Area.Height
 	}
 
+	// 快路径：两 buffer 尺寸一致时平铺索引直接比较，
+	// 避免每个 cell 两次 CellAt 的边界检查（全屏 12000 cell × 2 次冗余调用）
+	if b.Area == previous.Area {
+		w := int(b.Area.Width)
+		for y := 0; y < int(minH); y++ {
+			rowOff := y * w
+			for x := 0; x < int(minW); x++ {
+				curr := &b.Content[rowOff+x]
+				if curr.Skip || curr.WideChar {
+					continue
+				}
+				prev := &previous.Content[rowOff+x]
+				if curr.Symbol != prev.Symbol || curr.Fg != prev.Fg || curr.Bg != prev.Bg || curr.Modifier != prev.Modifier || curr.Link != prev.Link || curr.LinkID != prev.LinkID {
+					diffs = append(diffs, CellDiff{X: b.Area.X + uint16(x), Y: b.Area.Y + uint16(y), Cell: *curr})
+				}
+			}
+		}
+		return diffs
+	}
+
 	for y := uint16(0); y < minH; y++ {
 		for x := uint16(0); x < minW; x++ {
 			gx := b.Area.X + x
@@ -236,7 +260,7 @@ func (b *Buffer) DiffInto(previous *Buffer, dst []CellDiff) []CellDiff {
 				continue
 			}
 			// Skip cells marked with Skip flag
-			if curr.Skip {
+			if curr.Skip || curr.WideChar {
 				continue
 			}
 			if curr.Symbol != prev.Symbol || curr.Fg != prev.Fg || curr.Bg != prev.Bg || curr.Modifier != prev.Modifier || curr.Link != prev.Link || curr.LinkID != prev.LinkID {
@@ -302,7 +326,7 @@ func (it *DiffIter) Next() bool {
 		}
 
 		curr := it.current.CellAt(gx, gy)
-		if curr == nil || curr.Skip {
+		if curr == nil || curr.Skip || curr.WideChar {
 			continue
 		}
 
@@ -332,8 +356,16 @@ func (it *DiffIter) Cell() (uint16, uint16, *Cell) {
 
 // StringWidth returns the display width of a string in terminal cells.
 // Wide characters (CJK etc.) count as 2 cells.
+// 逐 rune 用 RuneWidth 累加而非直通 runewidth.StringWidth：
+// RuneWidth 对 Box Drawing/Block Elements 等强制宽度 1（CJK locale 下
+// runewidth 按环境变量启用 EastAsianWidth 会计 2），测量与渲染必须
+// 共用同一宽度事实来源，否则对齐与光标计算在中文环境下漂移。
 func StringWidth(s string) int {
-	return runewidth.StringWidth(s)
+	w := 0
+	for _, r := range s {
+		w += RuneWidth(r)
+	}
+	return w
 }
 
 // RuneWidth returns the display width of a rune in terminal cells.
@@ -361,13 +393,13 @@ func RuneWidth(r rune) int {
 // StringWidthTruncated returns the display width of s up to maxBytes bytes.
 func StringWidthTruncated(s string, maxBytes int) int {
 	if maxBytes >= len(s) {
-		return runewidth.StringWidth(s)
+		return StringWidth(s)
 	}
 	// Find the last valid rune boundary
 	for maxBytes > 0 && !isRuneStart(s, maxBytes) {
 		maxBytes--
 	}
-	return runewidth.StringWidth(s[:maxBytes])
+	return StringWidth(s[:maxBytes])
 }
 
 // isRuneStart checks if the byte at index i is the start of a UTF-8 rune.

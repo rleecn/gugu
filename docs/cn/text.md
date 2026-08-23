@@ -108,23 +108,15 @@ text.AlignRight
 
 ## 自动换行
 
-文本系统提供两种换行策略：
-
-### 单词换行
-
-在单词边界处换行，保留字素簇：
+换行由 `widgets.Paragraph.SetWrap` 按字素（grapheme）边界处理：
 
 ```go
-lines := text.WrapLineWordGrapheme(line, maxWidth)
+para.SetWrap(widgets.WrapWord)  // 词边界换行
+para.SetWrap(widgets.WrapChar)  // 任意字素边界换行
+para.SetWrap(widgets.WrapNone)  // 不换行
 ```
 
-### 字符换行
-
-当单词放不下时，在任意字素边界处换行：
-
-```go
-lines := text.WrapLineGrapheme(line, maxWidth)
-```
+`text` 包本身不导出独立的换行函数。
 
 ## 字素分段
 
@@ -173,12 +165,5 @@ t := text.NewTextBuilder().
 
 ## OSC 8 超链接
 
-Span、Line 和 Text 都支持终端超链接：
-
-```go
-span := text.NewSpan("点击这里").SetLink("https://example.com", "1")
-line := text.NewLine(spans...).SetLink("https://example.com", "2")
-t := text.NewText(lines...).SetLink("https://example.com", "3")
-```
-
-`LinkID` 是可选的标识符，用于终端对超链接进行分组。
+OSC 8 超链接在 `buffer.Cell` 层通过 `SetLink(url, id)` 支持（`LinkID` 为可选的分组标识），
+`AnsiBackend` 消费并输出对应序列。`text` 层的 `Span`/`Line`/`Text` 目前未暴露链接设置接口。

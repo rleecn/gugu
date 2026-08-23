@@ -1,23 +1,21 @@
-//go:build darwin
+//go:build darwin || dragonfly || freebsd || netbsd || openbsd || linux
 
 package terminal
 
 import (
 	"os"
-	"syscall"
 	"time"
-	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
-func init() {
-	_TCGETS = 0x40487413 // TCGETS for macOS
-	_TCSETS = 0x80487414 // TCSETS for macOS
-}
-
-// NativeBackend is a backend that uses native terminal operations on macOS/Linux.
+// NativeBackend 基于 x/sys/unix 的原生终端后端，覆盖 macOS/Linux/BSD 等
+// 全部 Unix 平台。termios 结构体布局、位常量与 ioctl 请求码由 x/sys 按平台
+// 提供，避免手写 ioctl 的 ABI 错位风险（Linux termios 为 4×uint32 布局，
+// 与 Darwin 的 uint64 布局不同，旧实现的清位操作在 Linux 上全部落错位置）。
 type NativeBackend struct {
 	*AnsiBackend
-	oldTermios Termios
+	oldTermios unix.Termios
 	rawMode    bool
 }
 
@@ -30,41 +28,39 @@ func NewNativeBackend() *NativeBackend {
 
 // Size returns the terminal size.
 func (b *NativeBackend) Size() (uint16, uint16, error) {
-	w, h, err := getTerminalSize()
+	ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
 	if err != nil {
 		return 80, 24, err
 	}
-	return w, h, nil
+	return ws.Col, ws.Row, nil
 }
 
 // EnableRawMode enables raw mode.
+// VMIN/VTIME 在 c_cc 中的索引随平台不同（Linux 为 6/5，Darwin/BSD 为 16/17），
+// 必须通过常量索引而非硬编码下标。
 func (b *NativeBackend) EnableRawMode() error {
 	if b.rawMode {
 		return nil
 	}
 
 	fd := int(os.Stdin.Fd())
-	var old Termios
-
-	if _, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), _TCGETS, uintptr(unsafe.Pointer(&old))); err != 0 {
+	old, err := unix.IoctlGetTermios(fd, tcGetRequest)
+	if err != nil {
 		return err
 	}
+	b.oldTermios = *old
 
-	b.oldTermios = old
+	raw := *old
+	raw.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP |
+		unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
+	raw.Oflag &^= unix.OPOST
+	raw.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
+	raw.Cflag &^= unix.CSIZE | unix.PARENB
+	raw.Cflag |= unix.CS8
+	raw.Cc[unix.VMIN] = 1
+	raw.Cc[unix.VTIME] = 0
 
-	raw := old
-	raw.Iflag &^= 0x00000001 /* IGNBRK */ | 0x00000002 /* BRKINT */ | 0x00000004 /* PARMRK */ |
-		0x00000080 /* ISTRIP */ | 0x00000100 /* INLCR */ | 0x00000200 /* IGNCR */ |
-		0x00000400 /* ICRNL */ | 0x00002000 /* IXON */
-	raw.Oflag &^= 0x00000001 /* OPOST */
-	raw.Lflag &^= 0x00000008 /* ECHO */ | 0x00000010 /* ECHONL */ | 0x00000100 /* ICANON */ |
-		0x00000080 /* ISIG */ | 0x00000400 /* IEXTEN */
-	raw.Cflag &^= 0x00003000 /* CSIZE */ | 0x00001000 /* PARENB */
-	raw.Cflag |= 0x00002000                           /* CS8 */
-	raw.Cc[6] = 1                                     /* VMIN */
-	raw.Cc[5] = 0                                     /* VTIME */
-
-	if _, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), _TCSETS, uintptr(unsafe.Pointer(&raw))); err != 0 {
+	if err := unix.IoctlSetTermios(fd, tcSetRequest, &raw); err != nil {
 		return err
 	}
 
@@ -78,8 +74,7 @@ func (b *NativeBackend) DisableRawMode() error {
 		return nil
 	}
 
-	fd := int(os.Stdin.Fd())
-	if _, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), _TCSETS, uintptr(unsafe.Pointer(&b.oldTermios))); err != 0 {
+	if err := unix.IoctlSetTermios(int(os.Stdin.Fd()), tcSetRequest, &b.oldTermios); err != nil {
 		return err
 	}
 
@@ -88,57 +83,33 @@ func (b *NativeBackend) DisableRawMode() error {
 }
 
 // Clear 继承 AnsiBackend.Clear 的实现（直接写 ANSI \x1b[H\x1b[2J）。
-// 不再覆盖为 exec.Command("clear")，避免每次清屏 fork 子进程的开销与潜在副作用。
 
 // Suspend 挂起 TUI：先恢复终端 cooked 模式，再退出 alt screen、显示光标。
-// NativeBackend 覆盖了 AnsiBackend 的 Suspend，额外处理 raw mode 切换。
+// 覆盖 AnsiBackend 的实现，额外处理 raw mode 切换，避免挂起后终端残留
+// raw 状态导致回显损坏。
 func (b *NativeBackend) Suspend() error {
-	// 先 flush 确保所有输出已写入
 	if err := b.Flush(); err != nil {
 		return err
 	}
-	// 禁用 raw mode，恢复原始 termios
 	if err := b.DisableRawMode(); err != nil {
 		return err
 	}
-	// 退出 alt screen + 显示光标 + flush
 	return b.AnsiBackend.Suspend()
 }
 
 // Resume 恢复 TUI：先进入 alt screen，再启用 raw mode。
 func (b *NativeBackend) Resume() error {
-	// 进入 alt screen + 隐藏光标 + flush
 	if err := b.AnsiBackend.Resume(); err != nil {
 		return err
 	}
-	// 重新启用 raw mode
 	return b.EnableRawMode()
 }
 
 // GetCursorPosition 返回当前光标位置 (x=col, y=row, 0-based)。
 // 通过 DSR (ESC[6n) 请求并由 queryCursorPositionViaDSR 使用 unix.Poll 带
-// 超时读取响应，避免老实现 goroutine + 阻塞 Read 在超时后泄漏的问题。
+// 超时读取响应，避免阻塞 Read 在超时后泄漏 goroutine。
 func (b *NativeBackend) GetCursorPosition() (uint16, uint16, error) {
 	return queryCursorPositionViaDSR(100 * time.Millisecond)
-}
-
-func getTerminalSize() (uint16, uint16, error) {
-	type winsize struct {
-		Row    uint16
-		Col    uint16
-		Xpixel uint16
-		Ypixel uint16
-	}
-
-	ws := &winsize{}
-	fd := int(os.Stdout.Fd())
-	_, _, err := syscall.Syscall(syscall.SYS_IOCTL,
-		uintptr(fd), uintptr(syscall.TIOCGWINSZ),
-		uintptr(unsafe.Pointer(ws)))
-	if err != 0 {
-		return 0, 0, err
-	}
-	return ws.Col, ws.Row, nil
 }
 
 // Ensure interfaces are satisfied

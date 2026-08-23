@@ -205,7 +205,7 @@ func TestBatchExecutesConcurrently(t *testing.T) {
 
 	// 通过 executeCmd 派发
 	p.executeCmd(Batch(cmds...))
-	p.cmdWorkers.Wait()
+	p.waitCmds()
 
 	if max := maxRunning.Load(); max < 2 {
 		t.Fatalf("expected concurrent execution (maxRunning>=2), got %d", max)
@@ -228,7 +228,7 @@ func TestSequenceExecutesInOrder(t *testing.T) {
 	}
 
 	p.executeCmd(Sequence(makeCmd(1), makeCmd(2), makeCmd(3)))
-	p.cmdWorkers.Wait()
+	p.waitCmds()
 
 	if len(order) != 3 || order[0] != 1 || order[1] != 2 || order[2] != 3 {
 		t.Fatalf("sequence order = %v, want [1 2 3]", order)

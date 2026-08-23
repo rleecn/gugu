@@ -245,6 +245,18 @@ type Table struct {
 	highlightSymbol      string
 	highlightSpacing     HighlightSpacing
 	state                TableState
+	// rowsVersion 在 SetRows 时递增；rowCache 缓存行可视高度前缀和，
+	// 值语义拷贝间共享指针，滚动跟随计算从每帧 O(N) 降为 O(1)+缓存。
+	rowsVersion uint32
+	rowCache    *tableRowCache
+}
+
+// tableRowCache 缓存行的可视占用前缀和。
+type tableRowCache struct {
+	version uint32
+	// ends[i] = rows[0..i) 累计占用的行数（含 TopMargin/BottomMargin/Height），
+	// 行 i 的可视范围是 [ends[i], ends[i+1])
+	ends []int
 }
 
 // NewTable creates a new Table with the given column widths.
@@ -260,13 +272,32 @@ func NewTable(widths []layout.ConstraintValue) Table {
 		cellHighlightStyle:   style.NewStyle().SetBg(style.Cyan).SetFg(style.Black).Bold(),
 		highlightSymbol:      ">> ",
 		state:                NewTableState(),
+		rowCache:             &tableRowCache{},
 	}
 }
 
 // SetRows sets the table rows.
 func (t Table) SetRows(rows []TableRow) Table {
 	t.rows = rows
+	t.rowsVersion++
 	return t
+}
+
+// rowVisualEnds 返回行可视占用的前缀和（见 tableRowCache.ends）。
+func (t *Table) rowVisualEnds() []int {
+	if c := t.rowCache; c != nil && c.version == t.rowsVersion && len(c.ends) == len(t.rows)+1 {
+		return c.ends
+	}
+	ends := make([]int, len(t.rows)+1)
+	for i, r := range t.rows {
+		ends[i+1] = ends[i] + int(r.TopMargin) + int(r.Height) + int(r.BottomMargin)
+	}
+	if t.rowCache == nil {
+		t.rowCache = &tableRowCache{}
+	}
+	t.rowCache.version = t.rowsVersion
+	t.rowCache.ends = ends
+	return ends
 }
 
 // SetHeader sets the header cells.
@@ -555,6 +586,8 @@ func (t Table) renderCellRow(buf *buffer.Buffer, inner layout.Rect, y uint16, ce
 }
 
 // calculateScrollOffset calculates the scroll offset to keep the selected row visible.
+// 按行真实占用（Height + TopMargin/BottomMargin）计算而非假设每行占 1 行：
+// 旧行为在多行高或带 margin 的表格中会把选中行滚出可视区。
 func (t Table) calculateScrollOffset(inner layout.Rect, startRow uint16, state *TableState) int {
 	if len(t.rows) == 0 {
 		return 0
@@ -574,18 +607,32 @@ func (t Table) calculateScrollOffset(inner layout.Rect, startRow uint16, state *
 		return 0
 	}
 
-	// Simple scroll: keep selected in view
 	offset := state.offset
 	if offset < 0 {
 		offset = 0
 	}
+	if offset >= len(t.rows) {
+		offset = len(t.rows) - 1
+	}
 
-	if selected < offset {
+	ends := t.rowVisualEnds()
+	// 选中行的可视范围 [selStart, selEnd)
+	selStart := ends[selected]
+	selEnd := ends[selected+1]
+
+	// 选中行起点在当前窗口上方：向上滚动，从选中行开始显示
+	if selStart < ends[offset] {
 		return selected
 	}
 
-	if selected >= offset+availableHeight {
-		return selected - availableHeight + 1
+	// 选中行终点超出窗口底部：向下滚动到能完整展示选中行的最小 offset
+	if selEnd > ends[offset]+availableHeight {
+		for i := selected; i >= 0; i-- {
+			if ends[selected+1]-ends[i] <= availableHeight {
+				return i
+			}
+		}
+		return 0
 	}
 
 	return offset

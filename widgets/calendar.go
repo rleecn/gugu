@@ -110,7 +110,9 @@ func (c Calendar) Render(area layout.Rect, buf *buffer.Buffer) {
 	block.Render(area, buf)
 
 	inner := block.Inner(area)
-	if inner.Width < 20 || inner.Height < 8 {
+	// 7 列表头各占 3 列（"Su " 等），至少需要 21 列；宽度不足时整体不渲染，
+	// 避免宽 20 时最后一列表头被丢弃、表头与日期错位一列。
+	if inner.Width < 21 || inner.Height < 8 {
 		return
 	}
 

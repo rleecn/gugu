@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/rleecn/gugu/layout"
@@ -110,7 +111,7 @@ func readKeys(keyCh chan<- Key) {
 }
 
 func main() {
-	backend := terminal.NewNativeBackend()
+	backend := terminal.NewDefaultBackend()
 	term, err := terminal.New(backend)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed: %v\n", err)
@@ -126,7 +127,7 @@ func main() {
 	}()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	keyCh := make(chan Key, 32)
 	go readKeys(keyCh)
@@ -150,15 +151,19 @@ func main() {
 
 	draw(term, inputs, labels, focusIdx, submitted)
 
+	// Windows 无 SIGWINCH，统一轮询检测尺寸变化（Unix 上同样有效）
+	resizeTicker := time.NewTicker(250 * time.Millisecond)
+	defer resizeTicker.Stop()
+
 	running := true
 	for running {
 		select {
-		case sig := <-sigCh:
-			if sig == syscall.SIGWINCH {
-				term.Resize()
+		case <-sigCh:
+			running = false
+		case <-resizeTicker.C:
+			prev := term.Viewport()
+			if term.Resize() == nil && term.Viewport() != prev {
 				draw(term, inputs, labels, focusIdx, submitted)
-			} else {
-				running = false
 			}
 		case key := <-keyCh:
 			if key.Quit {
@@ -176,18 +181,19 @@ func main() {
 				running = false
 				break
 			}
-			if key.Tab || key.Down {
+			if key.Tab || key.Down || key.Up {
 				if focusIdx >= 0 {
 					inputs[focusIdx] = inputs[focusIdx].SetFocused(false)
 				}
-				focusIdx = (focusIdx + 1) % len(inputs)
-				inputs[focusIdx] = inputs[focusIdx].SetFocused(true)
-			}
-			if key.Up {
-				if focusIdx >= 0 {
-					inputs[focusIdx] = inputs[focusIdx].SetFocused(false)
+				switch {
+				case focusIdx < 0:
+					// 无焦点时无论方向都聚焦第一个，避免 ↑ 与 ↓ 行为不对称
+					focusIdx = 0
+				case key.Up:
+					focusIdx = (focusIdx - 1 + len(inputs)) % len(inputs)
+				default: // Tab / Down
+					focusIdx = (focusIdx + 1) % len(inputs)
 				}
-				focusIdx = (focusIdx - 1 + len(inputs)) % len(inputs)
 				inputs[focusIdx] = inputs[focusIdx].SetFocused(true)
 			}
 			if key.Enter {

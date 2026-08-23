@@ -219,7 +219,7 @@ func (m *filePickerModel) View(frame *terminal.Frame, area layout.Rect) {
 }
 
 func main() {
-	backend := terminal.NewNativeBackend()
+	backend := terminal.NewDefaultBackend()
 	p := program.NewProgram(newFilePickerModel(), backend,
 		program.WithAltScreen(),
 		program.WithFPS(60),

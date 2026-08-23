@@ -2,6 +2,7 @@ package widgets
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/rleecn/gugu/buffer"
 	"github.com/rleecn/gugu/layout"
@@ -546,15 +547,21 @@ func (c Chart) Render(area layout.Rect, buf *buffer.Buffer) {
 }
 
 // dataBounds returns the (min, max) across all datasets for the given dimension (0=x, 1=y).
+// NaN/Inf 数据点视为缺失，不参与边界计算——NaN 与任何值比较均为 false，
+// 会污染 min/max 导致后续除零检查被绕过（NaN != NaN）。
 func dataBounds(datasets []Dataset, dim int) (float64, float64) {
 	var minVal, maxVal float64
 	first := true
 	for _, ds := range datasets {
 		for i := 0; i+1 < len(ds.data); i += 2 {
 			v := ds.data[i+dim]
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				continue
+			}
 			if first {
 				minVal, maxVal = v, v
 				first = false
+				continue
 			}
 			if v < minVal {
 				minVal = v
@@ -565,6 +572,23 @@ func dataBounds(datasets []Dataset, dim int) (float64, float64) {
 		}
 	}
 	return minVal, maxVal
+}
+
+// chartOffset 把数据坐标归一化到 [0, limit) 的浮点偏移。
+// 返回 ok=false 表示数据点无效（NaN/Inf）。先以 float 判界再转整数：
+// 负数或超出目标范围的 float→无符号整数转换在 Go 中是实现定义行为。
+func chartOffset(val, min, max float64, limit int) (float64, bool) {
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return 0, false
+	}
+	if limit <= 0 {
+		return 0, false
+	}
+	f := float64(limit) * (val - min) / (max - min)
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, false
+	}
+	return f, true
 }
 
 // renderLineChart renders a line chart dataset using Braille dots.
@@ -579,20 +603,26 @@ func renderLineChart(buf *buffer.Buffer, area layout.Rect, ds Dataset, xMin, xMa
 
 	for i := 0; i+1 < len(ds.data); i += 2 {
 		xVal, yVal := ds.data[i], ds.data[i+1]
-		sx := area.X + uint16(float64(area.Width)*(xVal-xMin)/(xMax-xMin))
-		sy := area.Bottom() - 1 - uint16(float64(area.Height-1)*(yVal-yMin)/(yMax-yMin))
-		if sx < area.X {
-			sx = area.X
+		fx, okx := chartOffset(xVal, xMin, xMax, int(area.Width))
+		fy, oky := chartOffset(yVal, yMin, yMax, int(area.Height)-1)
+		if !okx || !oky {
+			continue
 		}
-		if sx >= area.Right() {
-			sx = area.Right() - 1
+		// 越界点 clamp 到边界（与旧实现语义一致）
+		if fx < 0 {
+			fx = 0
 		}
-		if sy < area.Y {
-			sy = area.Y
+		if fx > float64(area.Width-1) {
+			fx = float64(area.Width - 1)
 		}
-		if sy >= area.Bottom() {
-			sy = area.Bottom() - 1
+		if fy < 0 {
+			fy = 0
 		}
+		if fy > float64(area.Height-1) {
+			fy = float64(area.Height - 1)
+		}
+		sx := area.X + uint16(fx)
+		sy := area.Bottom() - 1 - uint16(fy)
 		points = append(points, point{sx, sy})
 	}
 
@@ -613,8 +643,18 @@ func renderLineChart(buf *buffer.Buffer, area layout.Rect, ds Dataset, xMin, xMa
 func renderScatterChart(buf *buffer.Buffer, area layout.Rect, ds Dataset, xMin, xMax, yMin, yMax float64) {
 	for i := 0; i+1 < len(ds.data); i += 2 {
 		xVal, yVal := ds.data[i], ds.data[i+1]
-		sx := area.X + uint16(float64(area.Width)*(xVal-xMin)/(xMax-xMin))
-		sy := area.Bottom() - 1 - uint16(float64(area.Height-1)*(yVal-yMin)/(yMax-yMin))
+		fx, okx := chartOffset(xVal, xMin, xMax, int(area.Width))
+		fy, oky := chartOffset(yVal, yMin, yMax, int(area.Height)-1)
+		if !okx || !oky {
+			continue
+		}
+		// 越界点直接丢弃（与旧实现语义一致）
+		tx, ty := math.Trunc(fx), math.Trunc(fy)
+		if tx < 0 || tx > float64(area.Width-1) || ty < 0 || ty > float64(area.Height-1) {
+			continue
+		}
+		sx := area.X + uint16(tx)
+		sy := area.Bottom() - 1 - uint16(ty)
 		if sx >= area.X && sx < area.Right() && sy >= area.Y && sy < area.Bottom() {
 			buf.SetString(sx, sy, "•", ds.style)
 		}

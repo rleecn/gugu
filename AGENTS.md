@@ -28,7 +28,7 @@ import (
 )
 
 func main() {
-    backend := terminal.NewNativeBackend()
+    backend := terminal.NewDefaultBackend()
     term, err := terminal.New(backend)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed: %v\n", err)
@@ -97,10 +97,14 @@ func main() {
 ### Backend Selection
 
 ```go
-// macOS with termios raw mode
+// Default backend for the current platform (recommended for cross-platform code:
+// macOS/Linux/BSD native, Windows Console API + VT sequences)
+backend := terminal.NewDefaultBackend()
+
+// Native backend (macOS/Linux/BSD, termios raw mode via x/sys/unix)
 backend := terminal.NewNativeBackend()
 
-// Cross-platform (Unix + Windows)
+// Cross-platform backend (alias of NativeBackend on Unix; Console API on Windows)
 backend := terminal.NewCrossBackend()
 
 // Write ANSI to any io.Writer
@@ -158,14 +162,18 @@ term.Flush()  // Ensure output is written
 ```go
 type KeyEvent struct {
     Code      KeyCode
-    Modifiers Modifier
-    Runes     []rune
+    Modifiers KeyModifier
+    Text      string // character input (empty for special keys)
+    Release   bool   // key release (Kitty protocol); always false otherwise
+    Super     bool   // Super/Win key held (Kitty protocol)
+    CapsLock  bool
+    NumLock   bool
 }
 ```
 
-Key codes: `KeyA`-`KeyZ`, `Key0`-`Key9`, `KeyF1`-`KeyF12`, `KeyEnter`, `KeyEscape`, `KeyTab`, `KeyBackspace`, `KeyDelete`, `KeyUp`/`KeyDown`/`KeyLeft`/`KeyRight`, `KeyHome`/`KeyEnd`, `KeyPageUp`/`KeyPageDown`, `KeyInsert`, `KeyChar` (character input with `Text` field).
+Key codes: `KeyEsc`, `KeyEnter`, `KeyTab`, `KeyBackspace`, `KeyDelete`, `KeyInsert`, `KeyUp`/`KeyDown`/`KeyLeft`/`KeyRight`, `KeyHome`/`KeyEnd`, `KeyPageUp`/`KeyPageDown`, `KeyF1`-`KeyF12`, `KeyChar` (character input, value in `Text`).
 
-Modifiers: `ModShift`, `ModControl`, `ModAlt`, `ModSuper`.
+Modifiers: `ModNone`, `ModShift`, `ModAlt`, `ModCtrl`, `ModSuper`.
 
 Parse raw bytes:
 
@@ -173,23 +181,32 @@ Parse raw bytes:
 ev, consumed := terminal.ParseKeySequence(data)
 ```
 
-**Important**: Character keys (a-z, etc.) use `KeyChar` code with `Text` field, not individual key codes like `KeyQ`. Check with `ev.Code == terminal.KeyChar && ev.Text == "q"`.
+**Important**: Character keys (a-z, etc.) use `KeyChar` code with `Text` field, not individual key codes like `KeyQ`. 判断字符输入用便捷方法 `ev.IsChar()`（等价于 `ev.Code == terminal.KeyChar && len(ev.Text) > 0`），再比较 `Text`：
+
+```go
+if ev.IsChar() && ev.Text == "q" {
+    // 退出
+}
+```
 
 ### Mouse
 
 ```go
 type MouseEvent struct {
-    Kind     MouseEventKind
-    Column   uint16
-    Row      uint16
-    Modifiers Modifier
+    X      uint16
+    Y      uint16
+    Action MouseAction
+    Shift  bool // Shift key was held
+    Alt    bool // Alt/Meta key was held
+    Ctrl   bool // Ctrl key was held
 }
 ```
 
-Kinds: `MousePress`, `MouseRelease`, `MouseMove`, `MouseWheelUp`, `MouseWheelDown`.
+Actions: `MousePress`, `MouseRelease`, `MouseMiddlePress`, `MouseMiddleRelease`, `MouseRightPress`, `MouseRightRelease`, `MouseWheelUp`, `MouseWheelDown`, `MouseMove` (drag), `MouseHover`.
 
 ```go
-ev := terminal.ParseSGRMouse(data)
+ev, ok := terminal.ParseSGRMouse(params)      // params 为 "button;col;rowM"（ESC[< 之后的部分）
+ev, ok := terminal.ParseSGRMouseBytes(raw)    // 字节版本（零分配热路径）
 ```
 
 ## Layout
@@ -400,18 +417,13 @@ text.AlignRight
 
 ### Wrapping
 
-```go
-lines := text.WrapLineWordGrapheme(line, maxWidth)      // Word boundary
-lines := text.WrapLineGrapheme(line, maxWidth)           // Any grapheme boundary
-```
+换行由 `widgets.Paragraph.SetWrap(widgets.WrapWord / WrapChar / WrapNone)` 处理，
+底层按字素（grapheme）边界换行。`text` 包不导出独立的换行函数。
 
 ### OSC 8 Hyperlinks
 
-```go
-span := text.NewSpan("Click").SetLink("https://example.com", "1")
-line := text.NewLine(spans...).SetLink("https://example.com", "2")
-t := text.NewText(lines...).SetLink("https://example.com", "3")
-```
+OSC 8 超链接在 `buffer.Cell` 层通过 `SetLink(url, id)` 支持，`AnsiBackend` 消费
+并输出对应序列；`text` 层的 `Span`/`Line`/`Text` 目前未暴露链接设置接口。
 
 ## Widgets
 
@@ -424,9 +436,9 @@ block := widgets.NewBlock().
     SetBorders(widgets.BorderAll).
     SetTitle(" Title ").
     SetTitleStyle(style.NewStyle().Bold().SetFg(style.Yellow)).
-    SetTitlePosition(widgets.TitleTop).       // or TitleBottom
-    SetBorderType(widgets.BorderRounded).     // Plain, Rounded, Double, Thick, QuadrantInside, QuadrantOutside
-    SetPadding(layout.Padding{Left: 1, Right: 1}).
+    SetTitlePosition(widgets.TitleTop).         // or TitleBottom
+    SetBorderSet(widgets.RoundedBorderSet).     // Plain/Rounded/Double/Thick/QuadrantInside/QuadrantOutside
+    SetPadding(widgets.Padding{Left: 1, Right: 1}).
     SetStyle(style.NewStyle().SetBg(style.DarkGray))
 
 inner := block.Inner(area)  // Area excluding borders and padding
@@ -440,10 +452,10 @@ Border sides: `BorderTop`, `BorderBottom`, `BorderLeft`, `BorderRight`, `BorderA
 para := widgets.NewParagraph("Hello, World!").
     SetBlock(block).
     SetStyle(style.NewStyle().SetFg(style.White)).
-    SetAlignment(text.AlignLeft).
-    SetWrap(true).
-    SetScroll(widgets.NewScroll(0, 0)).  // (offsetX, offsetY)
-    SetMask('•')                          // Password mask
+    SetAlignment(widgets.TextCenter).
+    SetWrap(widgets.WrapWord).
+    SetScroll(0, 0).                       // (offsetY, offsetX)
+    SetMasked(true).SetMaskChar('•')       // Password mask
 ```
 
 ### List (Selectable, Stateful)
@@ -466,7 +478,7 @@ state.Select(0)
 frame.RenderStateful(list, area, state)
 ```
 
-List state operations: `Select`, `SelectFirst`, `SelectLast`, `SelectNext`, `SelectPrevious`, `SelectNextPage`, `SelectPreviousPage`, `Selected`, `Len`.
+List state operations: `SetSelected`, `Select`, `SelectFirst`, `SelectLast`, `SelectNext`, `SelectPrevious`, `SelectNextPage`, `SelectPreviousPage`, `Selected`, `Len`.
 
 ### Table (Tabular Data, Stateful)
 
@@ -479,12 +491,14 @@ table := widgets.NewTable(
 ).
     SetBlock(block).
     SetWidths(layout.FromLengths(20, 10)).
-    SetHighlightStyle(style.NewStyle().SetBg(style.DarkGray)).
+    SetRowHighlightStyle(style.NewStyle().SetBg(style.DarkGray)).
+    SetColumnHighlightStyle(style.NewStyle().SetBg(style.Blue)).
+    SetCellHighlightStyle(style.NewStyle().SetBg(style.DarkGray).SetFg(style.Yellow).Bold()).
     SetHighlightSymbol("▶ ").
     SetColumnSpacing(2)
 
 state := widgets.NewTableState()
-state.SelectRow(0)
+state.SetSelected(0)
 
 frame.RenderStateful(table, area, state)
 ```
@@ -497,7 +511,7 @@ row := widgets.RS(style.NewStyle().Bold(), "Name", "Age")        // Styled
 row := widgets.NewTableCell("Spanning").SetColumnSpan(2)         // Colspan
 ```
 
-Table state: `SelectRow`, `SelectColumn`, `SelectRowAndColumn`, `SelectedRow`, `SelectedColumn`.
+Table state: `SetSelected`, `SetSelectedColumn`, `SelectNext`, `SelectPrevious`, `SelectNextColumn`, `SelectPreviousColumn`, `Selected`, `SelectedColumn`.
 
 ### Input (Text Input)
 
@@ -507,23 +521,26 @@ input := widgets.NewInput().
     SetValue("Hello").
     SetStyle(style.NewStyle().SetFg(style.White)).
     SetPlaceholder("Type here...").
-    SetMask('•').
+    SetMask(true).SetMaskChar("•").
     SetMaxLength(100).
     SetOnSubmit(func(value string) { /* ... */ })
 ```
 
-Operations: `SetValue`, `InsertRune`, `DeleteBackward`, `DeleteForward`, `MoveLeft`, `MoveRight`, `MoveToStart`, `MoveToEnd`, `SelectAll`, `ClearSelection`, `Copy`, `Cut`, `Paste`.
+Operations: `SetValue`, `InsertRune`, `InsertString`, `DeleteCharBack`, `DeleteCharForward`, `MoveCursorLeft`, `MoveCursorRight`, `MoveCursorHome`, `MoveCursorEnd`, `SelectAll`, `DeleteSelection`, `Copy`, `Cut`, `Paste`.
 
 ### Tabs
 
 ```go
-tabs := widgets.NewTabs(
-    widgets.NewTab("Tab 1"),
-    widgets.NewTab("Tab 2").SetStyle(style.NewStyle().SetFg(style.Yellow)),
-).
+tabs := widgets.NewTabsFromStrings([]string{"Tab 1", "Tab 2"}).
     SetBlock(block).
     SetHighlightStyle(style.NewStyle().Bold().SetFg(style.White)).
-    SetSelect(0)
+    SetSelected(0)
+
+// 或使用 styled text.Line:
+tabs := widgets.NewTabs([]text.Line{
+    text.NewLine(text.NewSpan("Tab 1")),
+    text.NewLine(text.NewSpan("Tab 2").SetStyle(style.NewStyle().SetFg(style.Yellow))),
+}).SetSelected(0)
 ```
 
 ### Gauge (Progress Bar)
@@ -645,21 +662,22 @@ frame.RenderWidget(fill, area)
 When adjacent blocks share borders, merge them:
 
 ```go
-widgets.MergeBorders(buf, area1, area2, widgets.MergeExact)
+widgets.MergeBorders(buf, area, widgets.MergeExact)
 ```
 
 Strategies: `MergeReplace` (overwrite), `MergeExact` (exact overlaps only), `MergeFuzzy` (convert overlapping segments to intersections).
 
 ## WidgetRef (Dynamic Dispatch)
 
-For heterogeneous widget collections:
+For heterogeneous widget collections, use `terminal.WidgetRef` / `terminal.StatefulWidgetRef`
+（注意：位于 `terminal` 包，非 `widgets` 包）:
 
 ```go
-ref := widgets.NewWidgetRef(paragraph)
-frame.RenderWidgetRef(ref, area)
+ref := terminal.NewWidgetRef(paragraph)
+frame.RenderWidget(ref, area)   // WidgetRef 实现了 Widget 接口
 
-ref := widgets.NewStatefulWidgetRef(list)
-frame.RenderStatefulWidgetRef(ref, area, state)
+ref := terminal.NewStatefulWidgetRef(list, state)
+frame.RenderWidget(ref, area)   // StatefulWidgetRef 实现了 Widget 接口，内部携带 state
 ```
 
 ## Testing
@@ -669,8 +687,20 @@ Use `TestBackend` for unit testing:
 ```go
 backend := terminal.NewTestBackend(80, 24)
 // ... render widgets ...
-backend.AssertBuffer(expected)
+backend.AssertString(x, y, "expected", style.Reset, style.Reset, 0)
 cell := backend.Cell(x, y)
+```
+
+For full-app integration testing, use the `teatest` package (`TestProgram` runs a
+`Program`, injects input, and synchronizes on renders):
+
+```go
+tp := teatest.NewTestProgram(myModel, 80, 24)
+defer tp.Close()
+tp.Type("hello")
+tp.WaitForRender(t, time.Second)
+tp.AssertString(t, 0, 0, "hello")
+tp.Quit(t)
 ```
 
 ## Program (Elm Architecture)
@@ -691,7 +721,7 @@ type Model interface {
 ### 运行 Program
 
 ```go
-backend := terminal.NewNativeBackend()
+backend := terminal.NewDefaultBackend()
 p := program.NewProgram(model, backend,
     program.WithAltScreen(),
     program.WithMouseCellMotion(),
@@ -703,17 +733,24 @@ p := program.NewProgram(model, backend,
 p.Run()
 ```
 
+注意：`Program` 实例只能 `Run()` 一次；退出后（quitCh 已关闭）请创建新实例，
+二次 Run 会返回显式错误。`Run` 期间事件循环批量消费消息后统一渲染，
+FPS 节流采用「等待帧 deadline」而非睡眠——高频事件（鼠标拖动等）下
+消息吞吐不受节流影响。挂起（`p.Suspend()`/`p.Exec()`）期间事件循环继续
+处理消息但跳过渲染，恢复用 `p.Resume()` 或 SIGCONT。
+
 ### Options
 
 `WithAltScreen`、`WithMouseCellMotion`、`WithMouseAllMotion`、`WithBracketedPaste`、
 `WithReportFocus`、`WithFPS`、`WithInput`、`WithOutput`、`WithRenderer`、
-`WithFilter`、`WithInline(height)`、`WithColorProfile`、`WithoutSignalHandler`、
-`WithoutCatchPanics`。
+`WithFilter`、`WithInline(height)`、`WithColorProfile`、`WithKittyKeyboard`、
+`WithoutSignalHandler`、`WithoutCatchPanics`。
 
 ### 内置 Msg
 
 `KeyMsg`、`MouseMsg`、`WindowSizeMsg`、`FocusMsg`、`BlurMsg`、`PasteMsg`、
-`QuitMsg`、`ClearMsg`、`ErrorMsg`、`TickMsg`。
+`QuitMsg`、`ClearMsg`、`ErrorMsg`、`TickMsg`、`SuspendMsg`、`ResumeMsg`、
+`ExecDoneMsg`。
 
 自定义 Msg：嵌入 `program.EmbedMsg` 即获得 `Msg` 接口实现：
 
@@ -734,6 +771,16 @@ program.Tick(d)             // d 后发 TickMsg
 program.Every(d)            // 周期性 TickMsg（需在 Update 内重新调度）
 program.Send(msg)           // 包装 Msg 为 Cmd
 program.Print(args...)     // 打到 stderr（调试）
+```
+
+### 挂起与执行外部命令
+
+```go
+// 以下为 *Program 的方法（需在 Update 中通过 p 引用）
+cmd := p.Suspend()              // 挂起 TUI（退出 raw mode/alt screen），返回 SuspendMsg
+cmd := p.Resume()               // 恢复挂起的 TUI，返回 ResumeMsg
+cmd := p.Exec("less", "/etc/hosts")  // 挂起 → 执行命令 → 恢复 → 返回 ExecDoneMsg{Stdout, Stderr, Err}
+cmd := p.ExecCommand(cmd)       // 类似 Exec，接受自定义 *exec.Cmd
 ```
 
 ### 跨 goroutine 通信
@@ -760,7 +807,8 @@ profile.Downgrade(colorprofile.ANSI)
 profile.String()  // "TrueColor" 等
 ```
 
-支持 NO_COLOR 协议、COLORTERM=truecolor、TERM=*-256color、TERM=dumb 等检测。
+支持 NO_COLOR 协议、COLORTERM=truecolor、TERM=*-256color、TERM=dumb 等检测；
+Windows 终端（默认不设 TERM）会检测 `WT_SESSION`/`ConEmuANSI`/`ANSICON`。
 
 ## Terminal 扩展能力
 

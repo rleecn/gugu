@@ -79,7 +79,7 @@ func (m *textareaModel) Update(msg program.Msg) (program.Model, program.Cmd) {
 				return m, program.Quit
 			}
 			if msg.Text != "" && msg.Text[0] >= 0x20 {
-				m.insertRune(msg.Text)
+				m.insertString(msg.Text)
 			}
 		}
 		m.clampCursor()
@@ -88,20 +88,20 @@ func (m *textareaModel) Update(msg program.Msg) (program.Model, program.Cmd) {
 	return m, nil
 }
 
-// insertRune 在光标位置插入一个 rune（取 s 的首个 rune）。
-func (m *textareaModel) insertRune(s string) {
+// insertString 在光标位置插入字符串的全部 rune。
+// 支持 IME 组合输入或粘贴产生的多 rune 内容，而非只取首个 rune。
+func (m *textareaModel) insertString(s string) {
 	r := []rune(s)
 	if len(r) == 0 {
 		return
 	}
 	line := m.lines[m.cursorRow]
-	ch := r[0]
-	newLine := make([]rune, 0, len(line)+1)
+	newLine := make([]rune, 0, len(line)+len(r))
 	newLine = append(newLine, line[:m.cursorCol]...)
-	newLine = append(newLine, ch)
+	newLine = append(newLine, r...)
 	newLine = append(newLine, line[m.cursorCol:]...)
 	m.lines[m.cursorRow] = newLine
-	m.cursorCol++
+	m.cursorCol += len(r)
 	m.modified = true
 }
 
@@ -274,7 +274,7 @@ func (m *textareaModel) View(frame *terminal.Frame, area layout.Rect) {
 }
 
 func main() {
-	backend := terminal.NewNativeBackend()
+	backend := terminal.NewDefaultBackend()
 	p := program.NewProgram(newTextareaModel(), backend,
 		program.WithAltScreen(),
 		program.WithFPS(60),

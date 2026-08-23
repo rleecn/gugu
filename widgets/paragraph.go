@@ -50,6 +50,22 @@ type Paragraph struct {
 	verticalAlignment VerticalAlignment
 	masked            bool
 	maskChar          rune
+	// wrapCache 换行结果缓存。Paragraph 是值语义 builder：每个 SetX 返回
+	// 拷贝，拷贝间通过共享指针复用缓存；键覆盖全部影响换行的输入
+	//（宽度/模式/裁剪/掩码），内容仅在构造时设置故无需参与键。
+	// 每帧 Render 的临时拷贝命中同一缓存，滚动/重绘不再重复全文换行。
+	wrapCache *wrapCache
+}
+
+// wrapCache 保存一次换行计算的结果及其生效条件。
+type wrapCache struct {
+	valid  bool
+	width  uint16
+	wrap   WrapMode
+	trim   bool
+	masked bool
+	maskCh rune
+	lines  []text.Line
 }
 
 // NewParagraph creates a new Paragraph with the given text.
@@ -61,6 +77,7 @@ func NewParagraph(s string) Paragraph {
 		content:           text.TextFromString(s),
 		alignment:         TextLeft,
 		verticalAlignment: VerticalTop,
+		wrapCache:         &wrapCache{},
 	}
 }
 
@@ -72,6 +89,7 @@ func NewParagraphFromText(t text.Text) Paragraph {
 		content:           t,
 		alignment:         TextLeft,
 		verticalAlignment: VerticalTop,
+		wrapCache:         &wrapCache{},
 	}
 }
 
@@ -149,7 +167,37 @@ func (p Paragraph) LineWidth() int {
 
 // wrappedLines splits the text content into lines, handling wrapping based on display width.
 // Returns a slice of text.Line, each representing a visual line.
-func (p Paragraph) wrappedLines(width uint16) []text.Line {
+// 结果缓存：滚动与逐帧重绘在内容/宽度未变时直接复用（O(1)），
+// 避免旧实现每帧对全文重新分词换行的 O(全文) 开销。
+func (p *Paragraph) wrappedLines(width uint16) []text.Line {
+	maskChar := p.maskChar
+	if maskChar == 0 {
+		maskChar = '●'
+	}
+	if c := p.wrapCache; c != nil && c.valid &&
+		c.width == width && c.wrap == p.wrap && c.trim == p.wrapTrim &&
+		c.masked == p.masked && c.maskCh == maskChar {
+		return c.lines
+	}
+
+	lines := p.computeWrappedLines(width, maskChar)
+	if p.wrapCache == nil {
+		p.wrapCache = &wrapCache{}
+	}
+	*p.wrapCache = wrapCache{
+		valid:  true,
+		width:  width,
+		wrap:   p.wrap,
+		trim:   p.wrapTrim,
+		masked: p.masked,
+		maskCh: maskChar,
+		lines:  lines,
+	}
+	return lines
+}
+
+// computeWrappedLines 执行实际的换行计算。
+func (p Paragraph) computeWrappedLines(width uint16, maskChar rune) []text.Line {
 	rawLines := p.content.Lines()
 	if width == 0 {
 		return rawLines
@@ -157,10 +205,6 @@ func (p Paragraph) wrappedLines(width uint16) []text.Line {
 
 	// Apply masking if enabled
 	if p.masked {
-		maskChar := p.maskChar
-		if maskChar == 0 {
-			maskChar = '●'
-		}
 		maskedLines := make([]text.Line, len(rawLines))
 		for i, line := range rawLines {
 			var spans []text.Span
@@ -229,6 +273,34 @@ func trimLineLeadingSpaces(line text.Line) text.Line {
 	return text.NewLine(spans[startIdx:]...)
 }
 
+// spanRun 累积同样式连续字素，flush 时合并为单一 Span。
+// 旧实现对每个字素建独立 Span，80 列 1000 行段落一次换行产生约 8 万个
+// Span 对象；合并后 Span 数量只取决于样式边界数。
+type spanRun struct {
+	b     strings.Builder
+	style style.Style
+	valid bool
+}
+
+func (r *spanRun) add(dst *[]text.Span, g text.StyledGrapheme) {
+	if r.valid && r.style != g.Style() {
+		r.flushTo(dst)
+	}
+	r.b.WriteString(g.Symbol())
+	r.style = g.Style()
+	r.valid = true
+}
+
+// flush 把累积内容输出为 Span 追加到 dst。不重置自身状态，
+// 由调用方在行边界处 reset。
+func (r *spanRun) flushTo(dst *[]text.Span) {
+	if r.valid && r.b.Len() > 0 {
+		*dst = append(*dst, text.NewSpan(r.b.String()).SetStyle(r.style))
+	}
+	r.b.Reset()
+	r.valid = false
+}
+
 // wrapLineGrapheme wraps a text.Line by grapheme cluster boundaries,
 // respecting display width. This is more accurate than rune-based wrapping
 // because it keeps combining marks together with their base characters.
@@ -239,22 +311,25 @@ func wrapLineGrapheme(line text.Line, maxWidth int) []text.Line {
 	}
 
 	var result []text.Line
-	var currentSpans []text.Span
+	var spans []text.Span
+	var run spanRun
 	currentWidth := 0
 
 	for _, g := range graphemes {
 		gw := g.Width()
 		if currentWidth+gw > maxWidth && currentWidth > 0 {
-			result = append(result, text.NewLine(currentSpans...))
-			currentSpans = nil
+			run.flushTo(&spans)
+			result = append(result, text.NewLine(spans...))
+			spans = nil
 			currentWidth = 0
 		}
-		currentSpans = append(currentSpans, text.NewSpan(g.Symbol()).SetStyle(g.Style()))
+		run.add(&spans, g)
 		currentWidth += gw
 	}
 
-	if len(currentSpans) > 0 {
-		result = append(result, text.NewLine(currentSpans...))
+	run.flushTo(&spans)
+	if len(spans) > 0 {
+		result = append(result, text.NewLine(spans...))
 	}
 
 	return result
@@ -302,7 +377,8 @@ func wrapLineWordGrapheme(line text.Line, maxWidth int) []text.Line {
 	}
 
 	var result []text.Line
-	var currentSpans []text.Span
+	var spans []text.Span
+	var run spanRun
 	currentWidth := 0
 
 	for _, w := range words {
@@ -312,8 +388,9 @@ func wrapLineWordGrapheme(line text.Line, maxWidth int) []text.Line {
 		}
 
 		if currentWidth+w.width > maxWidth && currentWidth > 0 {
-			result = append(result, text.NewLine(currentSpans...))
-			currentSpans = nil
+			run.flushTo(&spans)
+			result = append(result, text.NewLine(spans...))
+			spans = nil
 			currentWidth = 0
 			// Skip whitespace at the beginning of a new line
 			if len(w.graphemes) == 1 && (w.graphemes[0].Symbol() == " " || w.graphemes[0].Symbol() == "\t") {
@@ -322,13 +399,14 @@ func wrapLineWordGrapheme(line text.Line, maxWidth int) []text.Line {
 		}
 
 		for _, g := range w.graphemes {
-			currentSpans = append(currentSpans, text.NewSpan(g.Symbol()).SetStyle(g.Style()))
+			run.add(&spans, g)
 		}
 		currentWidth += w.width
 	}
 
-	if len(currentSpans) > 0 {
-		result = append(result, text.NewLine(currentSpans...))
+	run.flushTo(&spans)
+	if len(spans) > 0 {
+		result = append(result, text.NewLine(spans...))
 	}
 
 	return result

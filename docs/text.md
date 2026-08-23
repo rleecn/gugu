@@ -108,23 +108,15 @@ text.AlignRight
 
 ## Word Wrapping
 
-The text system provides two wrapping strategies:
-
-### Word Wrapping
-
-Wraps at word boundaries, preserving grapheme clusters:
+换行由 `widgets.Paragraph.SetWrap` 按字素（grapheme）边界处理：
 
 ```go
-lines := text.WrapLineWordGrapheme(line, maxWidth)
+para.SetWrap(widgets.WrapWord)  // 词边界换行
+para.SetWrap(widgets.WrapChar)  // 任意字素边界换行
+para.SetWrap(widgets.WrapNone)  // 不换行
 ```
 
-### Character Wrapping
-
-Wraps at any grapheme boundary when a word doesn't fit:
-
-```go
-lines := text.WrapLineGrapheme(line, maxWidth)
-```
+`text` 包本身不导出独立的换行函数。
 
 ## Grapheme Segmentation
 
@@ -173,12 +165,5 @@ t := text.NewTextBuilder().
 
 ## OSC 8 Hyperlinks
 
-Spans, Lines, and Text support terminal hyperlinks:
-
-```go
-span := text.NewSpan("Click here").SetLink("https://example.com", "1")
-line := text.NewLine(spans...).SetLink("https://example.com", "2")
-t := text.NewText(lines...).SetLink("https://example.com", "3")
-```
-
-The `LinkID` is an optional identifier for the terminal to group hyperlinks.
+OSC 8 超链接在 `buffer.Cell` 层通过 `SetLink(url, id)` 支持（`LinkID` 为可选的分组标识），
+`AnsiBackend` 消费并输出对应序列。`text` 层的 `Span`/`Line`/`Text` 目前未暴露链接设置接口。

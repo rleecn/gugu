@@ -141,8 +141,8 @@ type Backend interface {
 
 Backend implementations:
 - **AnsiBackend** - Writes ANSI escape sequences to any `io.Writer`
-- **NativeBackend** - macOS-specific with termios raw mode and DSR cursor position
-- **CrossBackend** - Cross-platform: Unix (darwin/linux) + Windows Console API
+- **NativeBackend** - Native on macOS/Linux/BSD with termios raw mode (via x/sys/unix) and DSR cursor position
+- **CrossBackend** - Alias of NativeBackend on Unix; Windows Console API + VT on Windows
 - **TestBackend** - In-memory buffer for unit testing with assertion methods
 
 ### Viewport Modes

@@ -1,5 +1,16 @@
 package terminal
 
+// asciiText 预生成 ASCII 可见字符的单字节字符串，按键解析热路径零分配
+// （KeyEvent.Text 随消息经 channel 传递必然逃逸到堆，逐次 string(b) 转换
+// 在高频输入下是输入路径的主要分配源）。
+var asciiText [0x80]string
+
+func init() {
+	for i := 0x20; i < 0x7f; i++ {
+		asciiText[i] = string(rune(i))
+	}
+}
+
 // KeyEvent represents a keyboard event with full modifier support.
 type KeyEvent struct {
 	// Code identifies the key.
@@ -127,7 +138,7 @@ func ParseKeySequence(buf []byte) (KeyEvent, int) {
 		}
 		// ESC + char = Alt+char
 		if buf[1] >= 0x20 && buf[1] < 0x7f {
-			return KeyEvent{Code: KeyChar, Modifiers: ModAlt, Text: string(buf[1])}, 2
+			return KeyEvent{Code: KeyChar, Modifiers: ModAlt, Text: asciiText[buf[1]]}, 2
 		}
 		if buf[1] >= 0x80 {
 			// Alt + UTF-8 char
@@ -162,13 +173,12 @@ func ParseKeySequence(buf []byte) (KeyEvent, int) {
 	default:
 		// Ctrl+letter: 0x01-0x1a (except special ones handled above)
 		if b >= 0x01 && b <= 0x1a {
-			ch := string(rune('a' + b - 1))
-			return KeyEvent{Code: KeyChar, Modifiers: ModCtrl, Text: ch}, 1
+			return KeyEvent{Code: KeyChar, Modifiers: ModCtrl, Text: asciiText['a'+b-1]}, 1
 		}
 
 		// ASCII printable
 		if b >= 0x20 && b < 0x7f {
-			return KeyEvent{Code: KeyChar, Text: string(b)}, 1
+			return KeyEvent{Code: KeyChar, Text: asciiText[b]}, 1
 		}
 
 		// UTF-8 multi-byte
@@ -400,4 +410,34 @@ func utf8SeqLen(b byte) int {
 	default:
 		return 0
 	}
+}
+
+// IncompleteSequenceLen 判断 data 是否为某个合法输入序列的不完整前缀，
+// 返回需要继续等待的字节数（0 表示 data 不是不完整前缀，可按垃圾处理）。
+// 用于跨 read 边界的输入重组：高速输入/大段粘贴时，多字节 UTF-8 字符或
+// CSI 序列可能被拆在两次 read 之间，直接丢弃 lead byte 会导致丢字。
+//
+// 单独的 ESC 不视为不完整前缀（用户按下 ESC 键本身只发送一个字节，
+// 等待补全会让 ESC 独立按键永久滞留）；只对已出现 CSI/SS3 引导字节
+// （ESC [ / ESC O）但缺少终结字节的序列等待补全。
+func IncompleteSequenceLen(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	b := data[0]
+	if b == 0x1b && len(data) >= 2 && (data[1] == '[' || data[1] == 'O') {
+		// CSI/SS3：已识别引导但尚无终结字节（0x40-0x7e）则视为不完整
+		for i := 2; i < len(data); i++ {
+			if data[i] >= 0x40 && data[i] <= 0x7e {
+				return 0
+			}
+		}
+		return len(data)
+	}
+	if b >= 0x80 {
+		if seqLen := utf8SeqLen(b); seqLen > 0 && len(data) < seqLen {
+			return len(data) // 多字节 UTF-8 未读全
+		}
+	}
+	return 0
 }

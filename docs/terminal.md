@@ -63,8 +63,11 @@ In-memory backend for unit testing:
 ```go
 backend := terminal.NewTestBackend(80, 24)
 
-// Assert buffer content
-backend.AssertBuffer(expected)
+// Assert a cell's content (symbol + style)
+backend.AssertCell(x, y, symbol, fg, bg, mod)
+
+// Assert a string at a position
+backend.AssertString(x, y, "expected", fg, bg, mod)
 
 // Get cell at position
 cell := backend.Cell(x, y)
@@ -160,25 +163,28 @@ frame.RenderStatefulWidgetRef(ref, area, state)
 ```go
 type KeyEvent struct {
     Code      KeyCode
-    Modifiers Modifier
-    Runes     []rune
+    Modifiers KeyModifier
+    Text      string // 字符输入（空表示特殊键）
+    Release   bool   // 按键释放（Kitty 协议）；否则恒 false
+    Super     bool   // Super/Win 键（Kitty 协议）
+    CapsLock  bool
+    NumLock   bool
 }
 ```
 
-Key codes include:
-- Letters: `KeyA` - `KeyZ`
-- Numbers: `Key0` - `Key9`
-- Function keys: `KeyF1` - `KeyF12`
-- Special keys: `KeyEnter`, `KeyEscape`, `KeyTab`, `KeyBackspace`, `KeyDelete`
+Key codes:
+- Special keys: `KeyEsc`, `KeyEnter`, `KeyTab`, `KeyBackspace`, `KeyDelete`, `KeyInsert`
 - Navigation: `KeyUp`, `KeyDown`, `KeyLeft`, `KeyRight`, `KeyHome`, `KeyEnd`
 - Page: `KeyPageUp`, `KeyPageDown`
-- Insert: `KeyInsert`
+- Function keys: `KeyF1` - `KeyF12`
+- Character input: `KeyChar`（值在 `Text`，配合 `ev.IsChar()` 判断）
 
 Modifiers:
 ```go
+terminal.ModNone
 terminal.ModShift
-terminal.ModControl
 terminal.ModAlt
+terminal.ModCtrl
 terminal.ModSuper
 ```
 
@@ -189,31 +195,47 @@ terminal.ModSuper
 event, n := terminal.ParseKeySequence(data)
 ```
 
+判断字符输入用便捷方法 `ev.IsChar()`（等价于 `Code == KeyChar && len(Text) > 0`）：
+
+```go
+if ev.IsChar() && ev.Text == "q" {
+    // quit
+}
+```
+
 ### Mouse Events
 
 ```go
 type MouseEvent struct {
-    Kind     MouseEventKind
-    Column   uint16
-    Row      uint16
-    Modifiers Modifier
+    X      uint16
+    Y      uint16
+    Action MouseAction
+    Shift  bool
+    Alt    bool
+    Ctrl   bool
 }
 ```
 
-Mouse event kinds:
+Mouse event actions:
 ```go
-terminal.MousePress      // Button press
-terminal.MouseRelease    // Button release
-terminal.MouseMove       // Mouse move (with button held)
-terminal.MouseWheelUp    // Scroll up
-terminal.MouseWheelDown  // Scroll down
+terminal.MousePress         // Left press
+terminal.MouseRelease       // Left release
+terminal.MouseMiddlePress
+terminal.MouseMiddleRelease
+terminal.MouseRightPress
+terminal.MouseRightRelease
+terminal.MouseWheelUp      // Scroll up
+terminal.MouseWheelDown    // Scroll down
+terminal.MouseMove         // Drag (move with button held)
+terminal.MouseHover        // Move without button
 ```
 
 ### Parsing Mouse Events
 
 ```go
-// Parse SGR-extended mouse sequence
-event := terminal.ParseSGRMouse(data)
+// Parse SGR-extended mouse sequence（params 为 "button;col;rowM" 中 ESC[< 之后的部分）
+ev, ok := terminal.ParseSGRMouse(params)
+ev, ok := terminal.ParseSGRMouseBytes(raw) // 字节版本（零分配热路径）
 ```
 
 ## Double Buffering

@@ -2,7 +2,6 @@ package program
 
 import (
 	"io"
-	"time"
 
 	"github.com/rleecn/gugu/colorprofile"
 	"github.com/rleecn/gugu/terminal"
@@ -114,9 +113,6 @@ func WithColorProfile(profile colorprofile.Profile) ProgramOption {
 func WithKittyKeyboard() ProgramOption {
 	return func(p *Program) { p.kittyKeyboard = true }
 }
-
-// pollInterval 默认事件循环 poll 间隔。
-const defaultPollInterval = 10 * time.Millisecond
 
 // Ensure terminal.Backend usage marker（用于 go vet 静态检查）。
 var _ terminal.Backend = (terminal.Backend)(nil)

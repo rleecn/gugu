@@ -3,11 +3,17 @@ package layout
 import (
 	"encoding/binary"
 	"hash/fnv"
+	"sync"
 )
 
 // LayoutCache caches layout split results to avoid recomputation.
 // It uses an LRU eviction strategy when the cache exceeds its capacity.
+//
+// 所有操作由 mu 串行化：LayoutCache 是导出类型，调用方可能在多个
+// goroutine 间共享同一实例（如 widget 持有缓存 + 后台构建布局），
+// 无锁的 map 并发读写会触发不可 recover 的 fatal error。
 type LayoutCache struct {
+	mu       sync.Mutex
 	capacity int
 	entries  map[uint64]*cacheEntry
 	head     *cacheEntry // most recent
@@ -35,6 +41,8 @@ func NewLayoutCache(capacity int) *LayoutCache {
 // Get retrieves a cached layout result. Returns nil if not found.
 func (c *LayoutCache) Get(layout Layout, area Rect) []Rect {
 	key := cacheKey(layout, area)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if e, ok := c.entries[key]; ok {
 		c.moveToFront(e)
 		result := make([]Rect, len(e.val))
@@ -47,6 +55,8 @@ func (c *LayoutCache) Get(layout Layout, area Rect) []Rect {
 // Insert stores a layout result in the cache.
 func (c *LayoutCache) Insert(layout Layout, area Rect, rects []Rect) {
 	key := cacheKey(layout, area)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// If already exists, update and move to front
 	if e, ok := c.entries[key]; ok {
@@ -70,6 +80,8 @@ func (c *LayoutCache) Insert(layout Layout, area Rect, rects []Rect) {
 
 // Clear removes all entries from the cache.
 func (c *LayoutCache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.entries = make(map[uint64]*cacheEntry)
 	c.head = nil
 	c.tail = nil
@@ -77,6 +89,8 @@ func (c *LayoutCache) Clear() {
 
 // Len returns the number of cached entries.
 func (c *LayoutCache) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return len(c.entries)
 }
 

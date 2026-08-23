@@ -1,10 +1,5 @@
 package terminal
 
-import (
-	"strconv"
-	"strings"
-)
-
 // MouseAction represents the type of mouse action.
 type MouseAction int
 
@@ -35,6 +30,14 @@ type MouseEvent struct {
 // SGR format: ESC [ < button ; col ; row M (press) or m (release)
 // The input should be the part after "ESC [ <"
 func ParseSGRMouse(params string) (MouseEvent, bool) {
+	// 兼容入口：字节版解析是零分配热路径，string 版供外部调用方使用。
+	return ParseSGRMouseBytes([]byte(params))
+}
+
+// ParseSGRMouseBytes 与 ParseSGRMouse 语义一致，但接受字节切片输入，
+// 输入解析热路径（program.readInputLoop）可直接传递 read 缓冲，
+// 避免 string 转换与 strings.Split 带来的每次事件约 5 次分配。
+func ParseSGRMouseBytes(params []byte) (MouseEvent, bool) {
 	// params is like "0;45;12M" or "0;45;12m"
 	if len(params) < 4 {
 		return MouseEvent{}, false
@@ -42,23 +45,36 @@ func ParseSGRMouse(params string) (MouseEvent, bool) {
 
 	// Last char is 'M' (press) or 'm' (release)
 	last := params[len(params)-1]
-	paramsStr := params[:len(params)-1]
-
-	parts := strings.Split(paramsStr, ";")
-	if len(parts) != 3 {
+	if last != 'M' && last != 'm' {
 		return MouseEvent{}, false
 	}
 
-	button, err := strconv.Atoi(parts[0])
-	if err != nil {
+	// 手写三段整数解析（button;col;row）
+	var nums [3]int
+	idx, n := 0, 0
+	for _, b := range params[:len(params)-1] {
+		if b == ';' {
+			if idx >= 3 {
+				return MouseEvent{}, false
+			}
+			nums[idx] = n
+			idx++
+			n = 0
+			continue
+		}
+		if b < '0' || b > '9' {
+			return MouseEvent{}, false
+		}
+		n = n*10 + int(b-'0')
+	}
+	if idx != 2 {
 		return MouseEvent{}, false
 	}
-	col, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return MouseEvent{}, false
-	}
-	row, err := strconv.Atoi(parts[2])
-	if err != nil {
+	nums[2] = n
+
+	button, col, row := nums[0], nums[1], nums[2]
+	// SGR 坐标为 1-based；0 或超界属于异常序列，丢弃而非回绕成 uint16 大值
+	if col < 1 || row < 1 || col > 65536 || row > 65536 {
 		return MouseEvent{}, false
 	}
 

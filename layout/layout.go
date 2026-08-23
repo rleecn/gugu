@@ -154,7 +154,12 @@ func (l Layout) resolveConstraints(available uint16) []uint16 {
 				continue
 			}
 
-			remaining := available - used
+			// remaining 必须饱和：Min 可超量（used > available），
+			// uint16 直接相减会下溢成大数，导致后续 Length/Max 等拿到错误的剩余量。
+			remaining := uint16(0)
+			if used < available {
+				remaining = available - used
+			}
 			if remaining == 0 && c.Type != Min {
 				sizes[i] = 0
 				resolved[i] = true
@@ -205,7 +210,8 @@ func (l Layout) resolveConstraints(available uint16) []uint16 {
 			for i, c := range l.Constraints {
 				if c.Type == Fill {
 					if totalFill > 0 {
-						sizes[i] = remaining * c.Value / totalFill
+						// 32 位运算避免 remaining * c.Value 的 uint16 回绕
+						sizes[i] = uint16((uint32(remaining) * uint32(c.Value)) / uint32(totalFill))
 						distributed += sizes[i]
 					}
 				}

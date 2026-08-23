@@ -7,6 +7,7 @@ package colorprofile
 
 import (
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -27,11 +28,13 @@ const (
 
 // Detect 根据环境变量自动检测终端颜色能力。
 // 检测顺序（优先级从高到低）：
-//  1. COLORTERM=truecolor / 24bit            -> TrueColor
-//  2. TERM=*-256color                        -> ANSI256
-//  3. TERM=ansi|vt100|dumb 或 NO_COLOR set    -> Ascii
-//  4. TERM 包含 color 字样                    -> ANSI
-//  5. 默认                                    -> ANSI256（现代终端保守假设）
+//  1. NO_COLOR set                              -> Ascii
+//  2. COLORTERM=truecolor / 24bit               -> TrueColor
+//  3. Windows 平台分支（见 detectWindows）       -> Windows 终端大多不设 TERM
+//  4. TERM=*-256color                           -> ANSI256
+//  5. TERM=ansi|vt100|dumb 或 TERM 为空          -> Ascii
+//  6. TERM 包含 color 字样                       -> ANSI
+//  7. 默认                                       -> ANSI256（现代终端保守假设）
 //
 // 检测结果可作为 program.WithColorProfile 入参。
 func Detect() Profile {
@@ -44,6 +47,11 @@ func Detect() Profile {
 		if lc == "truecolor" || lc == "24bit" || strings.Contains(lc, "24-bit") {
 			return TrueColor
 		}
+	}
+	// Windows 分支必须在 TERM 判空之前：conhost/PowerShell/Windows Terminal
+	// 默认都不设置 TERM，通用规则会把整个 Windows 误判为 Ascii（无色）。
+	if runtime.GOOS == "windows" {
+		return detectWindows()
 	}
 	term := strings.ToLower(os.Getenv("TERM"))
 	if term == "" || term == "dumb" {
@@ -61,6 +69,31 @@ func Detect() Profile {
 	}
 	// 现代终端默认假设 256 色（覆盖 macOS Terminal.app、gnome-terminal 等）
 	return ANSI256
+}
+
+// detectWindows 检测 Windows 终端颜色能力。
+// 优先级：WT_SESSION（Windows Terminal，TrueColor）> ConEmu > ANSICON >
+// TERM（Git Bash/MSYS 会设置，复用通用规则）> 默认 ANSI
+// （Win10 1607+ conhost 支持 VT 序列，保守按 16 色处理以兼容老系统）。
+func detectWindows() Profile {
+	if os.Getenv("WT_SESSION") != "" {
+		return TrueColor
+	}
+	if os.Getenv("ConEmuANSI") != "" {
+		return ANSI256
+	}
+	if os.Getenv("ANSICON") != "" {
+		return ANSI
+	}
+	if term := strings.ToLower(os.Getenv("TERM")); term != "" && term != "dumb" {
+		if strings.Contains(term, "256color") {
+			return ANSI256
+		}
+		if strings.Contains(term, "color") || strings.Contains(term, "ansi") {
+			return ANSI
+		}
+	}
+	return ANSI
 }
 
 // Downgrade 把给定 Profile 降级到 target 及以下。

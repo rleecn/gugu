@@ -79,8 +79,15 @@ func (t Tabs) SetPadding(left, right string) Tabs {
 }
 
 // SetSelected sets the selected tab index (0-based).
+// 索引 clamp 到 [0, len(titles)-1]：越界/负值会导致无任何 tab 高亮。
 func (t Tabs) SetSelected(i int) Tabs {
 	t.selected = i
+	if n := len(t.titles); n > 0 && t.selected >= n {
+		t.selected = n - 1
+	}
+	if t.selected < 0 {
+		t.selected = 0
+	}
 	return t
 }
 

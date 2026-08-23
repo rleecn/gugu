@@ -26,21 +26,21 @@ block := widgets.NewBlock().
     SetTitle(" Title ").
     SetTitleStyle(style.NewStyle().Bold().SetFg(style.Yellow)).
     SetTitlePosition(widgets.TitleTop).
-    SetBorderType(widgets.BorderRounded).
-    SetPadding(layout.Padding{Left: 1, Right: 1}).
+    SetBorderSet(widgets.RoundedBorderSet).
+    SetPadding(widgets.Padding{Left: 1, Right: 1}).
     SetStyle(style.NewStyle().SetBg(style.DarkGray))
 ```
 
-### Border Types
+### Border Sets
 
-| Type | Example |
+| Set | Example |
 |------|---------|
-| `BorderPlain` | `┌─┐\n│ │\n└─┘` |
-| `BorderRounded` | `╭─╮\n│ │\n╰─╯` |
-| `BorderDouble` | `╔═╗\n║ ║\n╚═╝` |
-| `BorderThick` | `┏━┓\n┃ ┃\n┗━┛` |
-| `BorderQuadrantInside` | `▗▄▖\n▐ ▌\n▝▀▘` |
-| `BorderQuadrantOutside` | `▛▀▜\n▌ ▐\n▙▄▟` |
+| `widgets.PlainBorderSet` | `┌─┐\n│ │\n└─┘` |
+| `widgets.RoundedBorderSet` | `╭─╮\n│ │\n╰─╯` |
+| `widgets.DoubleBorderSet` | `╔═╗\n║ ║\n╚═╝` |
+| `widgets.ThickBorderSet` | `┏━┓\n┃ ┃\n┗━┛` |
+| `widgets.QuadrantInsideBorderSet` | `▗▄▖\n▐ ▌\n▝▀▘` |
+| `widgets.QuadrantOutsideBorderSet` | `▛▀▜\n▌ ▐\n▙▄▟` |
 
 ### Border Sides
 
@@ -71,17 +71,16 @@ Multi-line text display with wrapping, alignment, scrolling, and masking.
 para := widgets.NewParagraph("Hello, World!").
     SetBlock(block).
     SetStyle(style.NewStyle().SetFg(style.White)).
-    SetAlignment(text.AlignLeft).
-    SetWrap(true).
-    SetScroll(scroll).
-    SetMask('•')  // Password mask
+    SetAlignment(widgets.TextLeft).
+    SetWrap(widgets.WrapWord).
+    SetScroll(0, 0).                       // (offsetY, offsetX)
+    SetMasked(true).SetMaskChar('•')       // Password mask
 ```
 
-### Scroll State
+### Scroll
 
 ```go
-scroll := widgets.NewScroll(0, 0)  // (offsetX, offsetY)
-scroll = scroll.SetY(5)            // Scroll to line 5
+para.SetScroll(0, 5)  // (offsetY, offsetX) — 滚动到第 5 行
 ```
 
 ## List
@@ -147,7 +146,7 @@ table := widgets.NewTable(
     SetColumnSpacing(2)
 
 state := widgets.NewTableState()
-state.SelectRow(0)
+state.SetSelected(0)
 
 frame.RenderStateful(table, area, state)
 ```
@@ -179,11 +178,14 @@ row := widgets.RS(style.NewStyle().Bold(), "Name", "Age")
 
 ```go
 state := widgets.NewTableState()
-state.SelectRow(3)
-state.SelectColumn(1)
-state.SelectRowAndColumn(3, 1)
-state.SelectedRow()
-state.SelectedColumn()
+state.SetSelected(3)
+state.SetSelectedColumn(1)
+state.SelectNext(10)         // 向下选择一行（total 为总行数）
+state.SelectPrevious()       // 向上选择一行
+state.SelectNextColumn(4)    // 向右选择一列
+state.SelectPreviousColumn() // 向左选择一列
+state.Selected()             // 当前选中行
+state.SelectedColumn()       // 当前选中列
 ```
 
 ## Input
@@ -196,7 +198,7 @@ input := widgets.NewInput().
     SetValue("Hello").
     SetStyle(style.NewStyle().SetFg(style.White)).
     SetPlaceholder("Type here...").
-    SetMask('•').
+    SetMask(true).SetMaskChar("•").
     SetMaxLength(100).
     SetOnSubmit(func(value string) { /* ... */ })
 ```
@@ -206,17 +208,18 @@ input := widgets.NewInput().
 ```go
 input.SetValue("new text")
 input.InsertRune('x')
-input.DeleteBackward()
-input.DeleteForward()
-input.MoveLeft()
-input.MoveRight()
-input.MoveToStart()
-input.MoveToEnd()
+input.InsertString("text")
+input.DeleteCharBack()          // 退格删除
+input.DeleteCharForward()       // 前进删除
+input.MoveCursorLeft()
+input.MoveCursorRight()
+input.MoveCursorHome()
+input.MoveCursorEnd()
 input.SelectAll()
-input.ClearSelection()
-input.Copy()      // Returns selected text
-input.Cut()       // Returns selected text and removes it
-input.Paste("text")
+input.DeleteSelection()
+input.Copy(clip)               // 需实现 widgets.Clipboard 接口
+input.Cut(clip)
+input.Paste(clip)
 ```
 
 ## Tabs
@@ -224,13 +227,16 @@ input.Paste("text")
 Horizontal tab bar with styled titles.
 
 ```go
-tabs := widgets.NewTabs(
-    widgets.NewTab("Tab 1"),
-    widgets.NewTab("Tab 2").SetStyle(style.NewStyle().SetFg(style.Yellow)),
-).
+tabs := widgets.NewTabsFromStrings([]string{"Tab 1", "Tab 2"}).
     SetBlock(block).
     SetHighlightStyle(style.NewStyle().Bold().SetFg(style.White)).
-    SetSelect(0)
+    SetSelected(0)
+
+// 或使用 styled text.Line:
+tabs := widgets.NewTabs([]text.Line{
+    text.NewLine(text.NewSpan("Tab 1")),
+    text.NewLine(text.NewSpan("Tab 2").SetStyle(style.NewStyle().SetFg(style.Yellow))),
+}).SetSelected(0)
 ```
 
 ## Gauge
@@ -372,7 +378,7 @@ frame.RenderWidget(fill, area)
 When adjacent blocks share borders, use `MergeBorders()` to create clean intersections:
 
 ```go
-widgets.MergeBorders(buf, area1, area2, widgets.MergeExact)
+widgets.MergeBorders(buf, area, widgets.MergeExact)
 ```
 
 Three strategies:
@@ -382,12 +388,13 @@ Three strategies:
 
 ## WidgetRef
 
-For heterogeneous widget collections:
+For heterogeneous widget collections, use `terminal.WidgetRef` / `terminal.StatefulWidgetRef`
+（注意：位于 `terminal` 包，非 `widgets` 包）:
 
 ```go
-ref := widgets.NewWidgetRef(paragraph)
-ref := widgets.NewStatefulWidgetRef(list)
+ref := terminal.NewWidgetRef(paragraph)
+frame.RenderWidget(ref, area)   // WidgetRef 实现了 Widget 接口
 
-frame.RenderWidgetRef(ref, area)
-frame.RenderStatefulWidgetRef(ref, area, state)
+ref := terminal.NewStatefulWidgetRef(list, state)
+frame.RenderWidget(ref, area)   // StatefulWidgetRef 实现了 Widget 接口，内部携带 state
 ```

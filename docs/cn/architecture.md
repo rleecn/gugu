@@ -141,8 +141,8 @@ type Backend interface {
 
 后端实现：
 - **AnsiBackend** - 向任意 `io.Writer` 写入 ANSI 转义序列
-- **NativeBackend** - macOS 专用，支持 termios raw 模式和 DSR 光标位置
-- **CrossBackend** - 跨平台：Unix（darwin/linux）+ Windows Console API
+- **NativeBackend** - 原生后端，覆盖 macOS/Linux/BSD，termios raw 模式（x/sys/unix）+ DSR 光标位置
+- **CrossBackend** - Unix 上是 NativeBackend 的别名；Windows 上为 Console API + VT
 - **TestBackend** - 内存缓冲区，用于单元测试，提供断言方法
 
 ### 视口模式

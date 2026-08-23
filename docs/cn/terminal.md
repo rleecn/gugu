@@ -63,8 +63,11 @@ backend := terminal.NewCrossBackend()
 ```go
 backend := terminal.NewTestBackend(80, 24)
 
-// 断言缓冲区内容
-backend.AssertBuffer(expected)
+// 断言单元格内容（符号 + 样式）
+backend.AssertCell(x, y, symbol, fg, bg, mod)
+
+// 断言指定位置的字符串
+backend.AssertString(x, y, "expected", fg, bg, mod)
 
 // 获取指定位置的单元格
 cell := backend.Cell(x, y)
@@ -160,25 +163,28 @@ frame.RenderStatefulWidgetRef(ref, area, state)
 ```go
 type KeyEvent struct {
     Code      KeyCode
-    Modifiers Modifier
-    Runes     []rune
+    Modifiers KeyModifier
+    Text      string // 字符输入（空表示特殊键）
+    Release   bool   // 按键释放（Kitty 协议）；否则恒 false
+    Super     bool   // Super/Win 键（Kitty 协议）
+    CapsLock  bool
+    NumLock   bool
 }
 ```
 
-按键代码包括：
-- 字母：`KeyA` - `KeyZ`
-- 数字：`Key0` - `Key9`
-- 功能键：`KeyF1` - `KeyF12`
-- 特殊键：`KeyEnter`、`KeyEscape`、`KeyTab`、`KeyBackspace`、`KeyDelete`
+按键代码：
+- 特殊键：`KeyEsc`、`KeyEnter`、`KeyTab`、`KeyBackspace`、`KeyDelete`、`KeyInsert`
 - 导航键：`KeyUp`、`KeyDown`、`KeyLeft`、`KeyRight`、`KeyHome`、`KeyEnd`
 - 翻页键：`KeyPageUp`、`KeyPageDown`
-- 插入键：`KeyInsert`
+- 功能键：`KeyF1` - `KeyF12`
+- 字符输入：`KeyChar`（值在 `Text`，配合 `ev.IsChar()` 判断）
 
 修饰键：
 ```go
+terminal.ModNone
 terminal.ModShift
-terminal.ModControl
 terminal.ModAlt
+terminal.ModCtrl
 terminal.ModSuper
 ```
 
@@ -189,31 +195,47 @@ terminal.ModSuper
 event, n := terminal.ParseKeySequence(data)
 ```
 
+判断字符输入用便捷方法 `ev.IsChar()`（等价于 `Code == KeyChar && len(Text) > 0`）：
+
+```go
+if ev.IsChar() && ev.Text == "q" {
+    // 退出
+}
+```
+
 ### 鼠标事件
 
 ```go
 type MouseEvent struct {
-    Kind     MouseEventKind
-    Column   uint16
-    Row      uint16
-    Modifiers Modifier
+    X      uint16
+    Y      uint16
+    Action MouseAction
+    Shift  bool
+    Alt    bool
+    Ctrl   bool
 }
 ```
 
 鼠标事件类型：
 ```go
-terminal.MousePress      // 按钮按下
-terminal.MouseRelease    // 按钮释放
-terminal.MouseMove       // 鼠标移动（按住按钮时）
-terminal.MouseWheelUp    // 向上滚动
-terminal.MouseWheelDown  // 向下滚动
+terminal.MousePress         // 左键按下
+terminal.MouseRelease       // 左键释放
+terminal.MouseMiddlePress
+terminal.MouseMiddleRelease
+terminal.MouseRightPress
+terminal.MouseRightRelease
+terminal.MouseWheelUp      // 向上滚动
+terminal.MouseWheelDown    // 向下滚动
+terminal.MouseMove         // 拖拽（按住按钮移动）
+terminal.MouseHover        // 无按钮移动
 ```
 
 ### 解析鼠标事件
 
 ```go
-// 解析 SGR 扩展鼠标序列
-event := terminal.ParseSGRMouse(data)
+// 解析 SGR 扩展鼠标序列（params 为 "button;col;rowM" 中 ESC[< 之后的部分）
+ev, ok := terminal.ParseSGRMouse(params)
+ev, ok := terminal.ParseSGRMouseBytes(raw) // 字节版本（零分配热路径）
 ```
 
 ## 双缓冲

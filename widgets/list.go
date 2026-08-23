@@ -189,6 +189,17 @@ type List struct {
 	highlightSpacing   HighlightSpacing
 	scrollPadding      int
 	state              ListState
+	// hCache 缓存 item 高度与行前缀和：items 无 setter、构造后不可变，
+	// 值语义拷贝间共享缓存指针，每帧渲染命中缓存避免大列表 O(N) 重算
+	//（10000 项列表每帧两次 O(N) 分配 + 遍历）。
+	hCache *listHeightsCache
+}
+
+// listHeightsCache 缓存 List 的 item 布局推导结果。
+type listHeightsCache struct {
+	itemsLen int
+	heights  []int
+	starts   []int // starts[i] = item i 的起始行；starts[len] = 总高度
 }
 
 // NewList creates a new List with the given items.
@@ -201,6 +212,7 @@ func NewList(items []ListItem) List {
 		highlightSymbolStr: ">> ",
 		direction:          ListTopToBottom,
 		state:              NewListState(),
+		hCache:             &listHeightsCache{},
 	}
 }
 
@@ -341,20 +353,11 @@ func (l List) renderWithState(area layout.Rect, buf *buffer.Buffer, state *ListS
 		}
 	}
 
-	// Calculate total item heights for scrolling
-	itemHeights := make([]int, len(l.items))
-	totalHeight := 0
-	for i, item := range l.items {
-		h := item.Height()
-		if h < 1 {
-			h = 1
-		}
-		itemHeights[i] = h
-		totalHeight += h
-	}
+	// item 高度与行前缀和（缓存复用，见 hCache 注释）
+	itemHeights, itemStartRow := l.itemLayouts()
 
 	// Calculate scroll offset to keep selected item visible
-	state.offset = l.calculateScrollOffset(inner, itemHeights, state)
+	state.offset = l.calculateScrollOffset(inner, itemHeights, itemStartRow, state)
 	start := state.offset
 
 	// Calculate visible range
@@ -462,11 +465,39 @@ func (l List) renderWithState(area layout.Rect, buf *buffer.Buffer, state *ListS
 	}
 }
 
+// itemLayouts 返回每个 item 的显示高度与行前缀和（starts[i] 为 item i
+// 的起始行，starts[len] 为总高度）。结果缓存于共享的 hCache，
+// items 构造后不可变，跨帧/跨拷贝均可复用。
+func (l *List) itemLayouts() (heights, starts []int) {
+	if c := l.hCache; c != nil && c.itemsLen == len(l.items) {
+		return c.heights, c.starts
+	}
+	heights = make([]int, len(l.items))
+	for i, item := range l.items {
+		h := item.Height()
+		if h < 1 {
+			h = 1
+		}
+		heights[i] = h
+	}
+	starts = make([]int, len(heights)+1)
+	for i, h := range heights {
+		starts[i+1] = starts[i] + h
+	}
+	if l.hCache == nil {
+		l.hCache = &listHeightsCache{}
+	}
+	l.hCache.itemsLen = len(l.items)
+	l.hCache.heights = heights
+	l.hCache.starts = starts
+	return heights, starts
+}
+
 // calculateScrollOffset calculates the scroll offset to keep the selected item visible.
 // It properly handles multi-line items and scroll_padding.
 // 注意：state.offset 可能被外部 SetOffset 设置为超出 items 范围的值，
 // 此处必须先 clamp 到 [0, len(itemHeights)-1] 再访问 itemStartRow，避免越界 panic。
-func (l List) calculateScrollOffset(inner layout.Rect, itemHeights []int, state *ListState) int {
+func (l List) calculateScrollOffset(inner layout.Rect, itemHeights, itemStartRow []int, state *ListState) int {
 	if len(l.items) == 0 {
 		return 0
 	}
@@ -494,12 +525,6 @@ func (l List) calculateScrollOffset(inner layout.Rect, itemHeights []int, state 
 	}
 	if offset < 0 {
 		offset = 0
-	}
-
-	// itemStartRow[i] = the starting row (0-based) of item i
-	itemStartRow := make([]int, len(itemHeights)+1)
-	for i, h := range itemHeights {
-		itemStartRow[i+1] = itemStartRow[i] + h
 	}
 
 	// The selected item occupies rows [selectedStart, selectedEnd)

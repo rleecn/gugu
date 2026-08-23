@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rleecn/gugu/layout"
 	"github.com/rleecn/gugu/style"
@@ -19,7 +20,7 @@ import (
 )
 
 func main() {
-	backend := terminal.NewNativeBackend()
+	backend := terminal.NewDefaultBackend()
 	term, err := terminal.New(backend)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed: %v\n", err)
@@ -36,7 +37,7 @@ func main() {
 	}()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	keyCh := make(chan byte, 32)
 	go func() {
@@ -54,14 +55,18 @@ func main() {
 
 	draw(term)
 
+	// Windows 无 SIGWINCH，统一轮询检测尺寸变化（Unix 上同样有效）
+	resizeTicker := time.NewTicker(250 * time.Millisecond)
+	defer resizeTicker.Stop()
+
 	for running := true; running; {
 		select {
-		case sig := <-sigCh:
-			if sig == syscall.SIGWINCH {
-				term.Resize()
+		case <-sigCh:
+			running = false
+		case <-resizeTicker.C:
+			prev := term.Viewport()
+			if term.Resize() == nil && term.Viewport() != prev {
 				draw(term)
-			} else {
-				running = false
 			}
 		case b := <-keyCh:
 			if b == 'q' || b == 0x1b {

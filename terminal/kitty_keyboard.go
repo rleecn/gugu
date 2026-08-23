@@ -155,12 +155,14 @@ func kittyKeycodeToEvent(keycode, modifiers int) KeyEvent {
 	// ASCII 可打印字符 (33-126)
 	if keycode >= 33 && keycode <= 126 {
 		ev.Code = KeyChar
-		ev.Text = string(rune(keycode))
+		ev.Text = asciiText[keycode] // 预生成表，避免热路径逐键分配
 		return ev
 	}
 
-	// Kitty 功能键范围: 57358-57376 (F1-F12)
-	if keycode >= 57358 && keycode <= 57376 {
+	// Kitty 功能键范围: 57358-57369 (F1-F12)
+	// 上界必须停在 F12：gugu 的 KeyCode 枚举只到 KeyF12，其后紧跟 KeyChar，
+	// 若放到 57376（F19）会把 F13 映射成 KeyChar 等无意义值。
+	if keycode >= 57358 && keycode <= 57369 {
 		ev.Code = KeyCode(int(KeyF1) + (keycode - 57358))
 		return ev
 	}

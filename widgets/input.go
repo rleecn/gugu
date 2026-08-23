@@ -37,10 +37,15 @@ func NewInput() Input {
 }
 
 // SetValue sets the input value.
+// cursor 与 anchor 都 clamp 到新长度：SetValue 收缩字符串后 anchor 若
+// 仍指向旧偏移，Selection/InsertRune 对 value[] 切片会越界 panic。
 func (i Input) SetValue(s string) Input {
 	i.value = s
 	if i.cursor > len(s) {
 		i.cursor = len(s)
+	}
+	if i.anchor > len(s) {
+		i.anchor = len(s)
 	}
 	return i
 }

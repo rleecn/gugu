@@ -2,6 +2,7 @@ package widgets
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/rleecn/gugu/buffer"
 	"github.com/rleecn/gugu/layout"
@@ -70,7 +71,11 @@ func (g Gauge) SetPercent(p int) Gauge {
 }
 
 // SetRatio sets the progress ratio (0.0-1.0).
+// NaN 两个比较均为 false 会绕过钳制，导致渲染宽度转为平台相关的 int。
 func (g Gauge) SetRatio(r float64) Gauge {
+	if math.IsNaN(r) {
+		r = 0
+	}
 	if r < 0 {
 		r = 0
 	}
@@ -257,7 +262,11 @@ func (g LineGauge) SetPercent(p int) LineGauge {
 }
 
 // SetRatio sets the progress ratio (0.0-1.0).
+// NaN 两个比较均为 false 会绕过钳制，导致渲染宽度转为平台相关的 int。
 func (g LineGauge) SetRatio(r float64) LineGauge {
+	if math.IsNaN(r) {
+		r = 0
+	}
 	if r < 0 {
 		r = 0
 	}

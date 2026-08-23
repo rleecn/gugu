@@ -149,7 +149,7 @@ func joinLogs(logs []string) string {
 }
 
 func main() {
-	backend := terminal.NewNativeBackend()
+	backend := terminal.NewDefaultBackend()
 	m := &model{phase: phaseIdle, percent: 0, logs: []string{"Ready. Press s to start."}}
 	p := program.NewProgram(m, backend,
 		program.WithAltScreen(),

@@ -133,7 +133,7 @@ func pasteRepr(s string) string {
 }
 
 func main() {
-	backend := terminal.NewNativeBackend()
+	backend := terminal.NewDefaultBackend()
 	p := program.NewProgram(newAppModel(), backend,
 		program.WithAltScreen(),
 		program.WithMouseCellMotion(),

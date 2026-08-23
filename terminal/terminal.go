@@ -128,12 +128,13 @@ func (t *Terminal) Viewport() layout.Rect {
 // Draw renders the current buffer to the terminal by computing diffs.
 // 采用双缓冲交换 + 原地 Clear 复用底层 Cell 数组，避免每帧 NewBuffer 分配；
 // diff 结果写入 t.diffs 复用容量，避免每帧切片分配。
+// 零 diff 时仍调用 backend.Draw（空 diff）：backend 各实现对此零开销，
+// 而包装类 backend（如 teatest 的 signalBackend）依赖每次 Draw 通知
+// 测试侧「本帧已渲染」，跳过调用会让无变化帧的等待同步超时。
 func (t *Terminal) Draw() error {
 	t.diffs = t.current.DiffInto(&t.previous, t.diffs[:0])
-	if len(t.diffs) > 0 {
-		if err := t.backend.Draw(t.diffs); err != nil {
-			return err
-		}
+	if err := t.backend.Draw(t.diffs); err != nil {
+		return err
 	}
 	// Swap buffers: 旧的 current（刚渲染的帧）成为 previous，旧 previous 被清空后作为新 current。
 	// 仅交换值（slice header 拷贝），底层 Cell 数组原地复用，Clear 复位每个 cell。

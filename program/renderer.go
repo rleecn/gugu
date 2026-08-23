@@ -15,8 +15,12 @@ type Renderer interface {
 	Start() error
 	// Stop 停止渲染器，释放资源。
 	Stop() error
-	// Render 渲染当前帧到终端。受 FPS 节流。
+	// Render 渲染当前帧到终端。实现必须快速返回：
+	// 帧率节流的等待由调用方通过 NextDeadline 完成，Render 内不得阻塞。
 	Render() error
+	// NextDeadline 返回下一次允许渲染的截止时间；
+	// 零值表示可立即渲染（不限速或已到达帧间隔）。
+	NextDeadline() time.Time
 	// WriteRaw 写原始字节到输出（如切换 alt screen 的 ANSI 序列）。
 	WriteRaw(b []byte) error
 	// Flush 刷新底层输出。
@@ -25,8 +29,10 @@ type Renderer interface {
 
 // StandardRenderer 默认渲染器实现：
 //   - 基于 Terminal 的双缓冲 diff 渲染（只写变化单元格）
-//   - FPS 节流避免高频 Update 导致 CPU 飙升
-//   - 通过 mutex 串行化渲染避免并发写入
+//   - FPS 节流：Render 只做绘制与时间戳更新，跳帧决策由事件循环结合
+//     NextDeadline 完成——旧版在 Render 内 time.Sleep 会阻塞主循环，
+//     高频事件下事件吞吐被压到约 fps 条/秒
+//   - 通过 mutex 串行化所有输出路径（含 WriteRaw/Flush），避免并发交错
 type StandardRenderer struct {
 	mu         sync.Mutex
 	terminal   *terminal.Terminal
@@ -50,34 +56,40 @@ func (r *StandardRenderer) Start() error { return nil }
 // Stop 停止渲染器。
 func (r *StandardRenderer) Stop() error { return nil }
 
-// Render 调用 Terminal.Draw 完成 diff 渲染。受 FPS 节流。
-// 节流 sleep 在锁外执行：避免持锁 sleep 期间阻塞并发的 WriteRaw/Flush
-// （例如 Exec 恢复期间主循环与 resume 路径并发渲染）。lastRender 始终在锁内读写。
-func (r *StandardRenderer) Render() error {
-	if r.fps > 0 {
-		minDelta := time.Second / time.Duration(r.fps)
-		// 锁内读取上次渲染时间，计算需要等待的余量
-		r.mu.Lock()
-		elapsed := time.Since(r.lastRender)
-		r.mu.Unlock()
-		if elapsed < minDelta {
-			time.Sleep(minDelta - elapsed)
-		}
+// NextDeadline 返回下一次允许渲染的截止时间；零值表示可立即渲染。
+func (r *StandardRenderer) NextDeadline() time.Time {
+	if r.fps <= 0 {
+		return time.Time{}
 	}
 	r.mu.Lock()
-	r.lastRender = time.Now()
-	err := r.terminal.Draw()
+	d := r.lastRender.Add(time.Second / time.Duration(r.fps))
 	r.mu.Unlock()
-	return err
+	if !time.Now().Before(d) {
+		return time.Time{}
+	}
+	return d
+}
+
+// Render 调用 Terminal.Draw 完成 diff 渲染。不阻塞、不等待。
+func (r *StandardRenderer) Render() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastRender = time.Now()
+	return r.terminal.Draw()
 }
 
 // WriteRaw 写原始字节到输出（不经过 buffer diff）。
+// 持锁与 Render 串行化，保证字节流不交错。
 func (r *StandardRenderer) WriteRaw(b []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	_, err := r.output.Write(b)
 	return err
 }
 
-// Flush 刷新底层输出。
+// Flush 刷新底层输出。持锁与 Render 串行化。
 func (r *StandardRenderer) Flush() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.terminal.Flush()
 }

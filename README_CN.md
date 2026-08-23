@@ -15,7 +15,7 @@ Gugu 提供了一套完整的工具来构建丰富的终端应用：布局系统
 - **布局系统** - 基于约束的灵活布局，支持 Flex、Spacing、Margin 和 Padding
 - **文本系统** - 完整的 Unicode/UTF-8 支持，字素感知渲染、样式片段和自动换行
 - **样式系统** - ANSI 16 色、256 色、TrueColor RGB、修饰符、Material Design 和 Tailwind 调色板
-- **终端后端** - ANSI、Native（macOS）、跨平台（Unix/Windows）、测试后端
+- **终端后端** - ANSI、Native（macOS/Linux/BSD，基于 x/sys/unix）、Windows（Console API + VT）、测试后端，`NewDefaultBackend()` 按平台自动选择
 - **双缓冲** - 基于差异的高效渲染，仅写入变化的单元格
 - **丰富组件** - Block、Paragraph、List、Table、Input、Tabs、Gauge、BarChart、Chart、Canvas、Scrollbar、Sparkline、Calendar、Clear、Fill
 - **有状态组件** - List、Table、Scrollbar 支持外部状态管理
@@ -24,7 +24,7 @@ Gugu 提供了一套完整的工具来构建丰富的终端应用：布局系统
 - **边框合并** - 自动检测并合并边框交叉点
 - **OSC 8 超链接** - 可点击的终端超链接
 - **Serde 支持** - Style、Color、Modifier 的 JSON 序列化
-- **测试工具** - TestBackend 和缓冲区断言辅助工具
+- **测试工具** - TestBackend、缓冲区断言辅助工具，以及 `teatest` 集成测试框架
 - **Program 框架** - Elm 架构（Model/Update/View/Cmd/Msg），内置事件循环、信号处理、SIGWINCH 自动调整大小、panic 恢复、FPS 节流、跨 goroutine `p.Send`，以及 Batch/Sequence/Tick/Every 命令
 - **ProgramOption 系统** - WithAltScreen / WithMouseCellMotion / WithBracketedPaste / WithReportFocus / WithFPS / WithFilter / WithColorProfile / WithoutSignalHandler 等
 - **ColorProfile 检测** - 自动根据 NO_COLOR / COLORTERM / TERM 检测终端颜色能力并优雅降级到 ASCII / ANSI / ANSI256 / TrueColor
@@ -48,7 +48,7 @@ import (
 )
 
 func main() {
-    backend := terminal.NewNativeBackend()
+    backend := terminal.NewDefaultBackend()
     term, err := terminal.New(backend)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed: %v\n", err)
@@ -64,6 +64,8 @@ func main() {
         backend.ExitAlternateScreen()
     }()
 
+    // 注意：SIGWINCH 仅存在于 Unix；Windows 上需用 ticker 轮询 backend.Size()
+    // 检测尺寸变化（跨平台写法参见 examples/ 目录）。
     sigCh := make(chan os.Signal, 1)
     signal.Notify(sigCh, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM)
 
@@ -225,10 +227,13 @@ line := text.L(text.S("Hello", style.NewStyle().SetFg(style.Red)), text.NewSpan(
 ## 终端后端
 
 ```go
-// Native 后端（macOS，支持 raw 模式和光标位置）
+// 当前平台默认后端（跨平台代码推荐使用）
+backend := terminal.NewDefaultBackend()
+
+// Native 后端（macOS/Linux/BSD，基于 x/sys/unix 的 termios raw 模式）
 backend := terminal.NewNativeBackend()
 
-// 跨平台后端（Unix + Windows）
+// 跨平台后端（Unix 上是 NativeBackend 的别名，Windows 上为 Console API）
 backend := terminal.NewCrossBackend()
 
 // ANSI 后端（写入任意 io.Writer）
@@ -237,6 +242,21 @@ backend := terminal.NewAnsiBackend(os.Stdout)
 // 测试后端（用于单元测试）
 backend := terminal.NewTestBackend(80, 24)
 ```
+
+### 平台可用性
+
+| 工厂函数 | macOS | Linux | BSD | Windows |
+|---------|:-----:|:-----:|:---:|:-------:|
+| `NewDefaultBackend()` | Native | Native | Native | Windows（Console API） |
+| `NewNativeBackend()` | ✓ | ✓ | ✓ | —（termios 是 Unix 概念） |
+| `NewCrossBackend()` | ✓（= Native） | ✓（= Native） | ✓（= Native） | ✓（Console API） |
+| `NewAnsiBackend(w)` | ✓ | ✓ | ✓ | ✓ |
+
+说明：
+
+- **`NewDefaultBackend()` 是唯一保证在所有平台都能编译的入口**——除非有明确的平台定制需求，统一使用它。`NewNativeBackend` 在 Windows 上不存在；`NewAnsiBackend` 单独使用时无法提供 raw 模式和终端尺寸查询。
+- **Unix 上 `CrossBackend` 是 `NativeBackend` 的类型别名**（两者都返回 `*NativeBackend`，返回值可互换使用）。termios 层重写为基于 `golang.org/x/sys/unix` 后，两个实现在 macOS/Linux/BSD 上完全一致；保留 `CrossBackend` 名称是为了兼容既有调用方。
+- 历史上两个工厂的**平台覆盖互斥**（`NativeBackend` 仅 darwin、`CrossBackend` 仅 linux/windows），调用任意一个都会在其他平台编译失败。统一后消除了该陷阱，并新增 `NewDefaultBackend()` 作为跨平台入口。
 
 ## 视口模式
 
@@ -265,7 +285,7 @@ term, _ := terminal.NewFixed(backend, 10, 5, 40, 20)
 - `canvas/` - Braille 绘图演示
 - `chart/` - 折线图和散点图演示
 - `barchart/` - 柱状图多组对比演示
-- `sparkline/` - 迷你内联 sparkline 图表演示
+- `sparkline/` - 滚动更新的 sparkline 图表，模拟 CPU/内存/网络指标
 - `input/` - 支持 UTF-8 和选择的文本输入演示
 - `calendar/` - 月历演示
 - `program/` - Program 框架（Elm 架构）演示，包含 Tick 和跨 goroutine `Send`

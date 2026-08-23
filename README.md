@@ -15,7 +15,7 @@ Gugu provides a complete set of tools for building rich terminal applications: l
 - **Layout System** - Flexible constraint-based layout with Flex, Spacing, Margin, and Padding
 - **Text System** - Full Unicode/UTF-8 support with grapheme-aware rendering, styled spans, and word wrapping
 - **Style System** - ANSI 16 colors, 256-color, TrueColor RGB, modifiers, Material Design & Tailwind palettes
-- **Terminal Backends** - ANSI, Native (macOS), Cross-platform (Unix/Windows), Test backend
+- **Terminal Backends** - ANSI, Native (macOS/Linux/BSD via x/sys/unix), Windows (Console API + VT), Test backend, with `NewDefaultBackend()` picking the right one per platform
 - **Double Buffering** - Efficient diff-based rendering, only changed cells are written
 - **Rich Widgets** - Block, Paragraph, List, Table, Input, Tabs, Gauge, BarChart, Chart, Canvas, Scrollbar, Sparkline, Calendar, Clear, Fill
 - **Stateful Widgets** - List, Table, Scrollbar with external state management
@@ -24,7 +24,7 @@ Gugu provides a complete set of tools for building rich terminal applications: l
 - **Border Merging** - Automatic border intersection detection and merging
 - **OSC 8 Hyperlinks** - Clickable terminal hyperlinks
 - **Serde Support** - JSON serialization for Style, Color, Modifier
-- **Test Utilities** - TestBackend and buffer assertion helpers
+- **Test Utilities** - TestBackend, buffer assertion helpers, and `teatest` integration test framework
 - **Program Framework** - Elm Architecture (Model/Update/View/Cmd/Msg) with built-in event loop, signal handling, SIGWINCH auto-resize, panic recovery, FPS throttling, cross-goroutine `p.Send`, and Batch/Sequence/Tick/Every commands
 - **ProgramOption System** - WithAltScreen / WithMouseCellMotion / WithBracketedPaste / WithReportFocus / WithFPS / WithFilter / WithColorProfile / WithoutSignalHandler and more
 - **ColorProfile Detection** - Automatic NO_COLOR / COLORTERM / TERM-based capability detection with graceful downgrade to ASCII / ANSI / ANSI256 / TrueColor
@@ -48,7 +48,7 @@ import (
 )
 
 func main() {
-    backend := terminal.NewNativeBackend()
+    backend := terminal.NewDefaultBackend()
     term, err := terminal.New(backend)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed: %v\n", err)
@@ -64,6 +64,8 @@ func main() {
         backend.ExitAlternateScreen()
     }()
 
+    // Note: SIGWINCH is Unix-only; on Windows poll backend.Size() on a ticker
+    // instead (see examples/ for the cross-platform pattern).
     sigCh := make(chan os.Signal, 1)
     signal.Notify(sigCh, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM)
 
@@ -225,10 +227,13 @@ line := text.L(text.S("Hello", style.NewStyle().SetFg(style.Red)), text.NewSpan(
 ## Terminal Backends
 
 ```go
-// Native backend (macOS, with raw mode and cursor position)
+// Default backend for the current platform (recommended for cross-platform code)
+backend := terminal.NewDefaultBackend()
+
+// Native backend (macOS/Linux/BSD, termios raw mode via x/sys/unix)
 backend := terminal.NewNativeBackend()
 
-// Cross-platform backend (Unix + Windows)
+// Cross-platform backend (alias of NativeBackend on Unix; Console API on Windows)
 backend := terminal.NewCrossBackend()
 
 // ANSI backend (writes to any io.Writer)
@@ -237,6 +242,21 @@ backend := terminal.NewAnsiBackend(os.Stdout)
 // Test backend (for unit testing)
 backend := terminal.NewTestBackend(80, 24)
 ```
+
+### Platform availability
+
+| Factory | macOS | Linux | BSD | Windows |
+|---------|:-----:|:-----:|:---:|:-------:|
+| `NewDefaultBackend()` | Native | Native | Native | Windows (Console API) |
+| `NewNativeBackend()` | ✓ | ✓ | ✓ | — (termios is Unix-only) |
+| `NewCrossBackend()` | ✓ (= Native) | ✓ (= Native) | ✓ (= Native) | ✓ (Console API) |
+| `NewAnsiBackend(w)` | ✓ | ✓ | ✓ | ✓ |
+
+Notes:
+
+- **`NewDefaultBackend()` is the only entry point guaranteed to compile on every platform** — use it unless you have a platform-specific reason. `NewNativeBackend` does not exist on Windows, and `NewAnsiBackend` alone cannot provide raw mode or terminal size.
+- **On Unix, `CrossBackend` is a type alias of `NativeBackend`** (both return `*NativeBackend`, the values are interchangeable). After the termios layer was rewritten on top of `golang.org/x/sys/unix`, the two implementations became identical across macOS/Linux/BSD; the `CrossBackend` name is kept for API compatibility with existing callers.
+- Historically the two factories had **mutually exclusive platform coverage** (`NativeBackend` was darwin-only, `CrossBackend` was linux/windows-only), which made code calling either one fail to compile on the other platforms. The unification removed that trap; `NewDefaultBackend()` was added as the cross-platform entry point.
 
 ## Viewport Modes
 
@@ -265,7 +285,7 @@ See the [examples](examples/) directory:
 - `canvas/` - Braille drawing demo
 - `chart/` - Line chart and scatter plot demo
 - `barchart/` - Bar chart with multi-group comparison demo
-- `sparkline/` - Mini inline sparkline charts demo
+- `sparkline/` - Rolling sparkline charts with simulated CPU/memory/network metrics
 - `input/` - Text input with UTF-8 and selection demo
 - `calendar/` - Monthly calendar demo
 - `program/` - Program framework (Elm architecture) demo with Tick and cross-goroutine `Send`

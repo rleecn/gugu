@@ -227,7 +227,7 @@ func (m *httpModel) renderFooter() widgets.Paragraph {
 }
 
 func main() {
-	backend := terminal.NewNativeBackend()
+	backend := terminal.NewDefaultBackend()
 	p := program.NewProgram(newHTTPModel(), backend,
 		program.WithAltScreen(),
 		program.WithFPS(30),

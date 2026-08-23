@@ -36,7 +36,7 @@ func (g StyledGrapheme) Style() style.Style {
 }
 
 // StyledGraphemes returns the styled graphemes for a Line.
-// Each grapheme cluster preserves the style of its source Span.
+// Each grapheme cluster preserves the style of its source Span
 func (l Line) StyledGraphemes() []StyledGrapheme {
 	var result []StyledGrapheme
 	for _, span := range l.spans {
@@ -55,63 +55,64 @@ func (t Text) StyledGraphemes() [][]StyledGrapheme {
 }
 
 // segmentGraphemes splits a string into grapheme clusters with their display widths.
-// This implements a simplified grapheme clustering algorithm that handles:
-// - Base characters + combining marks (e.g. e + ́ = é)
-// - Half-width katakana combining marks (U+FF9E, U+FF9F)
-// - Hangul Jamo sequences
-// - Emoji ZWJ sequences (simplified)
-// - Regional indicator sequences (simplified)
+// 基于「簇起始字节索引」而非 rune 切片实现，消除每个字素一次的中间分配。
+// 处理：base + 组合标记（含 emoji 肤色修饰符）、半角片假名浊音符、
+// Hangul Jamo 序列（UAX #29 GB6-GB8）、ZWJ 序列（简化）、成对 Regional Indicator。
 func segmentGraphemes(s string, sty style.Style) []StyledGrapheme {
 	if s == "" {
 		return nil
 	}
 
 	var graphemes []StyledGrapheme
-	var current []rune
-	currentWidth := 0
+	start := 0
+	first, _ := utf8.DecodeRuneInString(s)
+	width := buffer.RuneWidth(first)
 
-	for _, r := range s {
-		if len(current) == 0 {
-			current = append(current, r)
-			currentWidth = buffer.RuneWidth(r)
+	for i, r := range s {
+		if i == 0 {
+			continue // 首 rune 已作为簇起点
+		}
+		if joinsCurrent(r, s[start:i]) {
 			continue
 		}
-
-		if isCombining(r) {
-			// Combining mark: append to current grapheme
-			current = append(current, r)
-			// Combining marks don't add width
-		} else if isRegionalIndicator(r) && len(current) == 1 && isRegionalIndicator(current[0]) {
-			// Two regional indicators form a flag emoji
-			current = append(current, r)
-			currentWidth = 2 // flag emoji width
-		} else if r == 0x200D {
-			// ZWJ: start of ZWJ sequence, append to current
-			current = append(current, r)
-		} else if len(current) > 0 && current[len(current)-1] == 0x200D {
-			// Character after ZWJ: part of the sequence
-			current = append(current, r)
-		} else {
-			// New base character: finalize current grapheme
-			graphemes = append(graphemes, StyledGrapheme{
-				symbol: string(current),
-				width:  currentWidth,
-				style:  sty,
-			})
-			current = []rune{r}
-			currentWidth = buffer.RuneWidth(r)
-		}
-	}
-
-	if len(current) > 0 {
+		// 新字素簇边界
 		graphemes = append(graphemes, StyledGrapheme{
-			symbol: string(current),
-			width:  currentWidth,
+			symbol: s[start:i],
+			width:  width,
 			style:  sty,
 		})
+		start = i
+		width = buffer.RuneWidth(r)
 	}
-
+	graphemes = append(graphemes, StyledGrapheme{
+		symbol: s[start:],
+		width:  width,
+		style:  sty,
+	})
 	return graphemes
+}
+
+// joinsCurrent 判断 r 是否应并入当前字素簇（cluster 为已累积的簇内容）。
+func joinsCurrent(r rune, cluster string) bool {
+	if isCombining(r) {
+		return true
+	}
+	if isRegionalIndicator(r) {
+		// 当前簇恰好一个 RI 时与 r 组成国旗；已配对则开启新簇
+		first, _ := utf8.DecodeRuneInString(cluster)
+		return isRegionalIndicator(first) && utf8.RuneCountInString(cluster) == 1
+	}
+	if r == 0x200D {
+		return true // ZWJ 总是并入当前簇（简化实现）
+	}
+	last, _ := utf8.DecodeLastRuneInString(cluster)
+	if last == 0x200D {
+		return true // ZWJ 之后的字符是序列的一部分
+	}
+	if isHangulExtend(r, last) {
+		return true
+	}
+	return false
 }
 
 // isCombining returns true if the rune is a combining mark that should be
@@ -149,12 +150,46 @@ func isCombining(r rune) bool {
 	if r >= 0xE0100 && r <= 0xE01EF {
 		return true
 	}
+	// Emoji modifiers（肤色调色板）：并入前面的 emoji 基础字符，
+	// 否则 👍🏽 会被拆成两个 2 宽字素导致排版错位
+	if r >= 0x1F3FB && r <= 0x1F3FF {
+		return true
+	}
 	return false
 }
 
 // isRegionalIndicator returns true if the rune is a regional indicator symbol.
 func isRegionalIndicator(r rune) bool {
 	return r >= 0x1F1E6 && r <= 0x1F1FF
+}
+
+// Hangul Jamo 区段（UAX #29 GB6-GB8 组合规则）。
+// L（leading consonant）、V（vowel）、T（trailing consonant），
+// 以及预组合音节 U+AC00-U+D7A3（按有无尾辅音分为 LV/LVT）。
+func isHangulL(r rune) bool { return r >= 0x1100 && r <= 0x115F }
+func isHangulV(r rune) bool { return r >= 0x1160 && r <= 0x11A7 }
+func isHangulT(r rune) bool { return r >= 0x11A8 && r <= 0x11FF }
+
+func isHangulSyllable(r rune) bool { return r >= 0xAC00 && r <= 0xD7A3 }
+
+// isHangulExtend 判断 r 能否接到以 last 结尾的 Hangul 簇上。
+// GB6: L × (L|V|T)；GB7: (LV|V) × (V|T)；GB8: (LVT|T) × T。
+func isHangulExtend(r, last rune) bool {
+	switch {
+	case isHangulL(last):
+		return isHangulL(r) || isHangulV(r) || isHangulT(r)
+	case isHangulV(last):
+		return isHangulV(r) || isHangulT(r)
+	case isHangulT(last):
+		return isHangulT(r)
+	case isHangulSyllable(last):
+		lv := (last-0xAC00)%28 == 0
+		if lv {
+			return isHangulV(r) || isHangulT(r)
+		}
+		return isHangulT(r)
+	}
+	return false
 }
 
 // GraphemeWidth returns the display width of a grapheme cluster.
@@ -177,34 +212,17 @@ func SegmentGraphemes(s string) []string {
 	}
 
 	var result []string
-	var current []rune
-
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		i += size
-
-		if len(current) == 0 {
-			current = append(current, r)
+	start := 0
+	for i, r := range s {
+		if i == 0 {
 			continue
 		}
-
-		if isCombining(r) {
-			current = append(current, r)
-		} else if isRegionalIndicator(r) && len(current) == 1 && isRegionalIndicator(current[0]) {
-			current = append(current, r)
-		} else if r == 0x200D {
-			current = append(current, r)
-		} else if len(current) > 0 && current[len(current)-1] == 0x200D {
-			current = append(current, r)
-		} else {
-			result = append(result, string(current))
-			current = []rune{r}
+		if joinsCurrent(r, s[start:i]) {
+			continue
 		}
+		result = append(result, s[start:i])
+		start = i
 	}
-
-	if len(current) > 0 {
-		result = append(result, string(current))
-	}
-
+	result = append(result, s[start:])
 	return result
 }

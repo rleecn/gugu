@@ -90,16 +90,17 @@ func (r Rect) Union(other Rect) Rect {
 
 // Inner returns a new rect inside the current one with the given margin.
 func (r Rect) Inner(margin Margin) Rect {
-	dh := margin.Horizontal * 2
-	dv := margin.Vertical * 2
-	if r.Width < dh || r.Height < dv {
+	// uint32 计算避免 margin.Horizontal*2 的 uint16 回绕
+	dh := uint32(margin.Horizontal) * 2
+	dv := uint32(margin.Vertical) * 2
+	if uint32(r.Width) < dh || uint32(r.Height) < dv {
 		return Rect{}
 	}
 	return Rect{
 		X:      r.X + margin.Horizontal,
 		Y:      r.Y + margin.Vertical,
-		Width:  r.Width - dh,
-		Height: r.Height - dv,
+		Width:  r.Width - uint16(dh),
+		Height: r.Height - uint16(dv),
 	}
 }
 
@@ -116,6 +117,7 @@ func (r Rect) Clamp(bounds Rect) Rect {
 }
 
 // Offset returns a new rect offset by the given amounts.
+// 正负方向都饱和：负向钳到 0，正向钳到 uint16 最大值，避免回绕。
 func (r Rect) Offset(dx, dy int) Rect {
 	x := int(r.X) + dx
 	y := int(r.Y) + dy
@@ -124,6 +126,12 @@ func (r Rect) Offset(dx, dy int) Rect {
 	}
 	if y < 0 {
 		y = 0
+	}
+	if x > int(^uint16(0)) {
+		x = int(^uint16(0))
+	}
+	if y > int(^uint16(0)) {
+		y = int(^uint16(0))
 	}
 	return Rect{X: uint16(x), Y: uint16(y), Width: r.Width, Height: r.Height}
 }
@@ -134,21 +142,37 @@ func (r Rect) Resize(width, height uint16) Rect {
 }
 
 // Centered returns a rect of the given size centered within r.
+// 目标尺寸大于容器时回退到容器左上角，避免 uint16 减法回绕。
 func (r Rect) Centered(width, height uint16) Rect {
-	x := r.X + (r.Width-width)/2
-	y := r.Y + (r.Height-height)/2
+	var x, y uint16
+	if width >= r.Width {
+		x = r.X
+	} else {
+		x = r.X + (r.Width-width)/2
+	}
+	if height >= r.Height {
+		y = r.Y
+	} else {
+		y = r.Y + (r.Height-height)/2
+	}
 	return Rect{X: x, Y: y, Width: width, Height: height}
 }
 
 // CenteredHorizontally returns a rect of the given width centered horizontally within r.
 func (r Rect) CenteredHorizontally(width uint16) Rect {
-	x := r.X + (r.Width-width)/2
+	x := r.X
+	if width < r.Width {
+		x = r.X + (r.Width-width)/2
+	}
 	return Rect{X: x, Y: r.Y, Width: width, Height: r.Height}
 }
 
 // CenteredVertically returns a rect of the given height centered vertically within r.
 func (r Rect) CenteredVertically(height uint16) Rect {
-	y := r.Y + (r.Height-height)/2
+	y := r.Y
+	if height < r.Height {
+		y = r.Y + (r.Height-height)/2
+	}
 	return Rect{X: r.X, Y: y, Width: r.Width, Height: height}
 }
 

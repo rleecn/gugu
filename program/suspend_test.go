@@ -12,21 +12,25 @@ import (
 )
 
 // newSuspendTestProgram 创建带 SuspendCapable 的 Program（使用 AnsiBackend）。
-func newSuspendTestProgram(opts ...ProgramOption) *Program {
+// 返回的 pw 需在测试结束时 Close 以解除 readInputLoop 的阻塞读取。
+// 用 io.Pipe 而非空 reader：空 reader 会立即 EOF 触发 QuitMsg 退出，
+// race 下时序更慢会使 Run 提前退出、suspend/exec 请求因 quitCh 关闭而失败。
+func newSuspendTestProgram(opts ...ProgramOption) (*Program, *io.PipeWriter) {
 	backend := terminal.NewAnsiBackend(io.Discard)
 	m := &noopModel{}
+	pr, pw := io.Pipe()
 	allOpts := append([]ProgramOption{
 		WithOutput(io.Discard),
-		WithInput(strings.NewReader("")),
+		WithInput(pr),
 		WithoutSignalHandler(),
 		WithFPS(0),
 	}, opts...)
-	return NewProgram(m, backend, allOpts...)
+	return NewProgram(m, backend, allOpts...), pw
 }
 
 // TestSuspendCapabilityDetection 验证 AnsiBackend 被识别为 SuspendCapable。
 func TestSuspendCapabilityDetection(t *testing.T) {
-	p := newSuspendTestProgram()
+	p, _ := newSuspendTestProgram()
 	if p.suspendCap == nil {
 		t.Fatal("AnsiBackend should be SuspendedCapable")
 	}
@@ -34,7 +38,8 @@ func TestSuspendCapabilityDetection(t *testing.T) {
 
 // TestSuspendCmdReturnsSuspendMsg 验证 Suspend() Cmd 执行后返回 SuspendMsg。
 func TestSuspendCmdReturnsSuspendMsg(t *testing.T) {
-	p := newSuspendTestProgram()
+	p, pw := newSuspendTestProgram()
+	defer pw.Close()
 	// 启动 Run 以便 renderer 初始化
 	done := make(chan struct{})
 	go func() {
@@ -62,7 +67,8 @@ func TestSuspendCmdReturnsSuspendMsg(t *testing.T) {
 
 // TestExecCmdRunsCommand 验证 Exec() Cmd 执行外部命令并返回结果。
 func TestExecCmdRunsCommand(t *testing.T) {
-	p := newSuspendTestProgram()
+	p, pw := newSuspendTestProgram()
+	defer pw.Close()
 	done := make(chan struct{})
 	go func() {
 		_, _ = p.Run()
@@ -94,7 +100,8 @@ func TestExecCmdRunsCommand(t *testing.T) {
 
 // TestExecCmdCommandError 验证 Exec() Cmd 处理命令执行失败。
 func TestExecCmdCommandError(t *testing.T) {
-	p := newSuspendTestProgram()
+	p, pw := newSuspendTestProgram()
+	defer pw.Close()
 	done := make(chan struct{})
 	go func() {
 		_, _ = p.Run()
@@ -120,7 +127,8 @@ func TestExecCmdCommandError(t *testing.T) {
 
 // TestExecCmdStderr 验证 Exec() Cmd 捕获 stderr。
 func TestExecCmdStderr(t *testing.T) {
-	p := newSuspendTestProgram()
+	p, pw := newSuspendTestProgram()
+	defer pw.Close()
 	done := make(chan struct{})
 	go func() {
 		_, _ = p.Run()
@@ -198,7 +206,7 @@ func (m *suspendTestModel) Update(msg Msg) (Model, Cmd) {
 // atomicBool 简单的原子布尔值。
 type atomicBool struct{ v atomic.Int32 }
 
-func (b *atomicBool) Load() bool          { return b.v.Load() == 1 }
+func (b *atomicBool) Load() bool { return b.v.Load() == 1 }
 func (b *atomicBool) Store(val bool) {
 	if val {
 		b.v.Store(1)

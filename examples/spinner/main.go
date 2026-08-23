@@ -49,7 +49,7 @@ func (m *spinnerModel) View(frame *terminal.Frame, area layout.Rect) {
 }
 
 func main() {
-	backend := terminal.NewNativeBackend()
+	backend := terminal.NewDefaultBackend()
 	p := program.NewProgram(&spinnerModel{}, backend,
 		program.WithAltScreen(),
 		program.WithFPS(30),
