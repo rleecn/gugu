@@ -17,8 +17,8 @@ Gugu 提供了一套完整的工具来构建丰富的终端应用：布局系统
 - **样式系统** - ANSI 16 色、256 色、TrueColor RGB、修饰符、Material Design 和 Tailwind 调色板
 - **终端后端** - ANSI、Native（macOS/Linux/BSD，基于 x/sys/unix）、Windows（Console API + VT）、测试后端，`NewDefaultBackend()` 按平台自动选择
 - **双缓冲** - 基于差异的高效渲染，仅写入变化的单元格
-- **丰富组件** - Block、Paragraph、List、Table、Input、Tabs、Gauge、BarChart、Chart、Canvas、Scrollbar、Sparkline、Calendar、Clear、Fill
-- **有状态组件** - List、Table、Scrollbar 支持外部状态管理
+- **丰富组件** - Block、Paragraph、List、Table、Input、Tabs、Ask、Gauge、BarChart、Chart、Canvas、Scrollbar、Sparkline、Calendar、Clear、Fill
+- **有状态组件** - List、Table、Scrollbar、Ask 支持外部状态管理
 - **输入处理** - 完整的键盘（F1-F12、修饰键、UTF-8）和鼠标（SGR 扩展）支持
 - **Builder API** - Layout、Span、Line、Text 和 Table Row 的链式构建器
 - **边框合并** - 自动检测并合并边框交叉点
@@ -148,6 +148,7 @@ gugu/
 | **Table** | 支持列约束、单元格/列选择的表格 |
 | **Input** | 支持 UTF-8、选择、剪贴板和验证的单行输入 |
 | **Tabs** | 带样式标题的水平标签栏 |
+| **Ask** | AI 应用决策卡片：问题 + 选项（单选/多选）+ 自定义输入 |
 | **Gauge** | 支持 Unicode 的进度条 |
 | **LineGauge** | 细线进度指示器 |
 | **BarChart** | 垂直柱状图 |
@@ -287,6 +288,7 @@ term, _ := terminal.NewFixed(backend, 10, 5, 40, 20)
 - `barchart/` - 柱状图多组对比演示
 - `sparkline/` - 滚动更新的 sparkline 图表，模拟 CPU/内存/网络指标
 - `input/` - 支持 UTF-8 和选择的文本输入演示
+- `ask/` - AI 应用选择卡片，演示单选/多选、自定义输入与鼠标支持
 - `calendar/` - 月历演示
 - `program/` - Program 框架（Elm 架构）演示，包含 Tick 和跨 goroutine `Send`
 - `progress/` - 通过 `p.Send` 由后台任务驱动的进度条演示

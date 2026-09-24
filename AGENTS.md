@@ -543,6 +543,41 @@ tabs := widgets.NewTabs([]text.Line{
 }).SetSelected(0)
 ```
 
+### Ask (AI 选择卡片)
+
+适用于 AI 应用的用户决策组件：问题 + 候选项（单选/多选）+ 自定义输入行，
+语义对齐 ask 工具——提交结果不保证来自选项列表，调用方不得假定 `Answers()`
+一定等于某个选项。
+
+```go
+ask := widgets.NewAsk("使用哪个日志库？", []string{"zap", "logrus", "slog"}).
+    SetMulti(true).                        // 默认单选
+    SetCustomMaxLength(200).               // 限制自定义答案长度（防误粘贴撑爆上下文）
+    SetBlock(widgets.NewBlock().
+        SetBorders(widgets.BorderAll).
+        SetTitle(" 库选型 "))
+
+state := widgets.NewAskState(ask.Len())
+
+// 按键语义：↑/↓ 移动（越过末项进入输入行）；空格 勾选（多选）；
+// Tab 切换输入行；可见字符直接进入输入行；Enter 提交；Esc 跳过。
+switch ask.HandleKey(ev, &state) {
+case widgets.AskEventSubmit:
+    fmt.Println(ask.Answers(&state)) // 自定义输入有内容时仅返回该文本
+case widgets.AskEventDismiss:
+    // 用户跳过：不构成任何选择
+}
+
+// 鼠标语义：点击选项选中（单选再次点击同一项=确认提交）/勾选（多选）；
+// 点击输入行聚焦；滚轮移动光标。area 必须与渲染该卡片的区域一致。
+switch ask.HandleMouse(ev, &state, area) {
+case widgets.AskEventSubmit:
+    fmt.Println(ask.Answers(&state))
+}
+
+frame.RenderStatefulWidget(ask, area, &state)
+```
+
 ### Gauge (Progress Bar)
 
 ```go

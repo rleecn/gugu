@@ -17,8 +17,8 @@ Gugu provides a complete set of tools for building rich terminal applications: l
 - **Style System** - ANSI 16 colors, 256-color, TrueColor RGB, modifiers, Material Design & Tailwind palettes
 - **Terminal Backends** - ANSI, Native (macOS/Linux/BSD via x/sys/unix), Windows (Console API + VT), Test backend, with `NewDefaultBackend()` picking the right one per platform
 - **Double Buffering** - Efficient diff-based rendering, only changed cells are written
-- **Rich Widgets** - Block, Paragraph, List, Table, Input, Tabs, Gauge, BarChart, Chart, Canvas, Scrollbar, Sparkline, Calendar, Clear, Fill
-- **Stateful Widgets** - List, Table, Scrollbar with external state management
+- **Rich Widgets** - Block, Paragraph, List, Table, Input, Tabs, Ask, Gauge, BarChart, Chart, Canvas, Scrollbar, Sparkline, Calendar, Clear, Fill
+- **Stateful Widgets** - List, Table, Scrollbar, Ask with external state management
 - **Input Handling** - Full keyboard (F1-F12, modifiers, UTF-8) and mouse (SGR extended) support
 - **Builder API** - Fluent builders for Layout, Span, Line, Text, and Table Row
 - **Border Merging** - Automatic border intersection detection and merging
@@ -148,6 +148,7 @@ See [docs/architecture.md](docs/architecture.md) for detailed architecture docum
 | **Table** | Tabular data with column constraints, cell/column selection |
 | **Input** | Single-line input with UTF-8, selection, clipboard, validation |
 | **Tabs** | Horizontal tab bar with styled titles |
+| **Ask** | AI-app decision card: question + options (single/multi) + custom input |
 | **Gauge** | Progress bar with Unicode support |
 | **LineGauge** | Thin line progress indicator |
 | **BarChart** | Vertical bar chart |
@@ -287,6 +288,7 @@ See the [examples](examples/) directory:
 - `barchart/` - Bar chart with multi-group comparison demo
 - `sparkline/` - Rolling sparkline charts with simulated CPU/memory/network metrics
 - `input/` - Text input with UTF-8 and selection demo
+- `ask/` - AI-app selection card with single/multi select, custom input, and mouse support
 - `calendar/` - Monthly calendar demo
 - `program/` - Program framework (Elm architecture) demo with Tick and cross-goroutine `Send`
 - `progress/` - Progress bar driven by a background task via `p.Send`

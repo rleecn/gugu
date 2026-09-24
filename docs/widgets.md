@@ -239,6 +239,39 @@ tabs := widgets.NewTabs([]text.Line{
 }).SetSelected(0)
 ```
 
+## Ask
+
+Selection card for AI applications: a question with candidate options (single/multi select) plus a custom-input row. The submitted answer is not guaranteed to come from the option list; callers must not assume `Answers()` equals one of the options.
+
+```go
+ask := widgets.NewAsk("Which logging library?", []string{"zap", "logrus", "slog"}).
+    SetMulti(true).          // default: single select
+    SetCustomMaxLength(200). // cap custom answers (protects the model context)
+    SetBlock(block)
+
+state := widgets.NewAskState(ask.Len())
+
+// Keys: ↑/↓ move (moving past the last option focuses the input row);
+// Space toggles (multi mode); Tab toggles the input row; any printable
+// character jumps into the input row; Enter submits; Esc dismisses.
+switch ask.HandleKey(ev, &state) {
+case widgets.AskEventSubmit:
+    fmt.Println(ask.Answers(&state)) // custom text, if non-empty, is the only answer
+case widgets.AskEventDismiss:
+    // user skipped: this is NOT a choice
+}
+
+// Mouse: click an option to select (single: click the same option again to
+// confirm) or toggle (multi); click the input row to focus it; wheel moves
+// the cursor. `area` must be the same rect the card was rendered into.
+switch ask.HandleMouse(ev, &state, area) {
+case widgets.AskEventSubmit:
+    fmt.Println(ask.Answers(&state))
+}
+
+frame.RenderStatefulWidget(ask, area, &state)
+```
+
 ## Gauge
 
 Progress bar with optional Unicode support.
