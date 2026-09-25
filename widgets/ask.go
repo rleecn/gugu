@@ -482,7 +482,10 @@ type askRows struct {
 // computeRows 推导内部布局：问题(0..questionH) + 空行 + 选项 + 空行 + 输入行 + 提示行；
 // 高度不足时依次折叠空行与问题行（与渲染折叠顺序一致）。
 func (a Ask) computeRows(area layout.Rect) askRows {
-	r := askRows{inner: a.block.Inner(area), questionY: int(area.Y)}
+	r := askRows{inner: a.block.Inner(area)}
+	// 问题段落渲染在 inner 坐标系（宽度/高度均取自 inner），
+	// Y 也必须取 inner.Y：取 area.Y 会在带边框时叠画上边框/标题行
+	r.questionY = int(r.inner.Y)
 	if r.inner.IsEmpty() {
 		return r
 	}

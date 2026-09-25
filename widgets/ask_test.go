@@ -28,6 +28,16 @@ func TestAskRenderSingle(t *testing.T) {
 	assertRow(t, buf, area, 7, "↑↓ 选择  Enter 确认  Tab 输入  Esc 跳过")
 }
 
+// 回归：computeRows 的 questionY 曾取 area.Y，带边框时问题文本叠画到上边框/标题行。
+func TestAskBlockQuestionBelowBorder(t *testing.T) {
+	a := NewAsk("Q?", []string{"zap", "slog"}) // 默认 BorderAll
+	buf, area := testRender(t, a, 20, 9)
+	// 上边框行保持完整，不被问题文本覆盖
+	assertRow(t, buf, area, 0, "╭──────────────────╮")
+	// 问题文本从 inner 首行（边框下一行）起画，紧贴 inner 左缘
+	assertRow(t, buf, area, 1, "│Q?                │")
+}
+
 func TestAskCursorHighlight(t *testing.T) {
 	a := NewAsk("q", []string{"a", "b"}).SetBlock(NoBlock())
 	buf, _ := testRender(t, a, 24, 8)
