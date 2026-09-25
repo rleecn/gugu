@@ -11,12 +11,14 @@ import (
 // 协议格式: CSI keycode ; modifiers [; event_type] u
 // 示例:
 //   CSI 97 ; 1 u        → a (普通按下)
-//   CSI 97 ; 5 u        → Ctrl+a (Shift=1 | Ctrl=4 = 5)
+//   CSI 97 ; 5 u        → Ctrl+a (ctrl=4, 值 = 4+1 = 5)
+//   CSI 109 ; 6 u       → Ctrl+Shift+m (shift+ctrl = 1+4, 值 = 5+1 = 6)
 //   CSI 97 ; 1 : 3 u    → a 释放事件
 //   CSI 13 ; 1 u        → Enter (与 Ctrl+M 消歧义)
 //
-// Kitty modifiers 位掩码:
-//   1=Shift, 2=Alt, 4=Ctrl, 8=Super, 16=CapsLock, 32=NumLock
+// Kitty modifiers 参数值 = 位域之和 + 1，位定义:
+//   shift=1, alt=2, ctrl=4, super=8, capslock=16, numlock=32
+// 解码统一走 decodeModifiers/modifiersFromBits（见 key.go）。
 
 // Kitty 键盘协议 ANSI 序列。
 const (
@@ -123,14 +125,16 @@ func ParseKittyKeySequence(data []byte) (KeyEvent, int) {
 
 // kittyKeycodeToEvent 将 Kitty keycode 和 modifiers 映射为 KeyEvent。
 func kittyKeycodeToEvent(keycode, modifiers int) KeyEvent {
+	// 协议值 = 位域 + 1；0 为协议外值，宽容按无修饰符处理
+	bits := max(modifiers-1, 0)
 	ev := KeyEvent{
-		Modifiers: kittyModifiersToGugu(modifiers),
+		Modifiers: modifiersFromBits(bits),
 	}
 
 	// 解析 Super/CapsLock/NumLock 位
-	ev.Super = (modifiers & 8) != 0
-	ev.CapsLock = (modifiers & 16) != 0
-	ev.NumLock = (modifiers & 32) != 0
+	ev.Super = bits&8 != 0
+	ev.CapsLock = bits&16 != 0
+	ev.NumLock = bits&32 != 0
 
 	// 特殊键映射
 	switch keycode {
@@ -197,20 +201,4 @@ func kittyKeycodeToEvent(keycode, modifiers int) KeyEvent {
 	}
 
 	return ev
-}
-
-// kittyModifiersToGugu 将 Kitty modifiers 位掩码映射为 gugu KeyModifier。
-func kittyModifiersToGugu(modifiers int) KeyModifier {
-	var m KeyModifier
-	if modifiers&1 != 0 {
-		m |= ModShift
-	}
-	if modifiers&2 != 0 {
-		m |= ModAlt
-	}
-	if modifiers&4 != 0 {
-		m |= ModCtrl
-	}
-	// Super: 通过 KeyEvent.Super 字段表示，不映射到 Modifiers
-	return m
 }

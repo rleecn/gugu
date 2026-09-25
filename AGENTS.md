@@ -818,6 +818,18 @@ cmd := p.Exec("less", "/etc/hosts")  // 挂起 → 执行命令 → 恢复 → �
 cmd := p.ExecCommand(cmd)       // 类似 Exec，接受自定义 *exec.Cmd
 ```
 
+### 鼠标捕获运行时切换
+
+```go
+// *Program 的方法（需在 Update 中返回该 Cmd 生效）
+cmd := p.SetMouseCapture(true)  // 运行时开启/关闭鼠标捕获
+```
+
+`WithMouseCellMotion`/`WithMouseAllMotion` 仅决定初始状态。捕获开启时终端把
+鼠标事件全部上报给应用，原生文本选择/复制被拦截，可按需释放交还终端。
+幂等；执行失败返回 `ErrorMsg` 且状态不翻转（可重试）；运行时关闭后退出
+不会重复发关闭序列。捕获关闭期间残留的排队 SGR 事件会被丢弃。
+
 ### 跨 goroutine 通信
 
 ```go

@@ -63,6 +63,12 @@ type Program struct {
 	// 由 parseAndDispatch 维护，readInputLoop 是单 goroutine，无需加锁。
 	pendingPaste strings.Builder
 	inPaste      bool
+	// mouseCaptureEnabled 鼠标捕获运行时状态。
+	// 初值由 WithMouseCellMotion/WithMouseAllMotion 推导（Option 仅决定初始态），
+	// 运行期以 SetMouseCapture 为准；enableTerminalFeatures/cleanup 依据它而非
+	// 选项字段操作终端，保证「运行时关闭后退出」不重复发关闭序列。
+	// 由 Cmd goroutine 与主循环跨 goroutine 读写，需原子操作。
+	mouseCaptureEnabled atomic.Bool
 
 	// 终端能力快照
 	altScreenCap      terminal.AltScreenCapable
@@ -93,6 +99,7 @@ func NewProgram(model Model, backend terminal.Backend, opts ...ProgramOption) *P
 			opt(p)
 		}
 	}
+	p.mouseCaptureEnabled.Store(p.mouseCellMotion || p.mouseAllMotion)
 	// 探测 backend 能力（可选接口断言）
 	p.altScreenCap, _ = backend.(terminal.AltScreenCapable)
 	p.bracketedPasteCap, _ = backend.(terminal.BracketedPasteCapable)
@@ -364,6 +371,46 @@ func (p *Program) Resume() Cmd {
 	}
 }
 
+// SetMouseCapture 运行时开启/关闭鼠标捕获，返回的 Cmd 需在 Update 中返回交由
+// 事件循环执行（与 Suspend/Exec 同通道：termCmds 跟踪 + 退出等待，避免与
+// 终端恢复流程交错）。捕获开启时终端把鼠标事件全部上报给应用，原生文本
+// 选择/复制被拦截；应用可按需切换（如按住 Shift 浏览时释放）。
+//
+// 语义：
+//   - 幂等：与当前状态一致时为 no-op；
+//   - 状态由 Program 统一管理：WithMouseCellMotion/WithMouseAllMotion 仅决定
+//     初始状态，运行期以本方法为准；运行时关闭后 cleanup 不再重复发关闭序列；
+//   - 执行失败不翻转状态（返回 ErrorMsg 供应用提示，可重试）；
+//   - EnableMouseCapture/DisableMouseCapture 位于 Backend 主接口，
+//     不支持的 backend（如 TestBackend）为 no-op 实现，状态照常翻转。
+func (p *Program) SetMouseCapture(enabled bool) Cmd {
+	release := p.trackTermCmd()
+	return func() Msg {
+		defer release()
+		if err := p.applyMouseCapture(enabled); err != nil {
+			return ErrorMsg{Err: fmt.Errorf("mouse capture: %w", err)}
+		}
+		return nil
+	}
+}
+
+// applyMouseCapture 执行捕获切换并维护状态。只能在 Cmd goroutine 中调用
+// （与主循环的并发安全由 mouseCaptureEnabled 原子性与 backend 内部锁保证）。
+func (p *Program) applyMouseCapture(enabled bool) error {
+	if p.mouseCaptureEnabled.Load() == enabled {
+		return nil
+	}
+	if enabled {
+		if err := p.backend.EnableMouseCapture(); err != nil {
+			return err
+		}
+	} else if err := p.backend.DisableMouseCapture(); err != nil {
+		return err
+	}
+	p.mouseCaptureEnabled.Store(enabled)
+	return nil
+}
+
 // Exec 返回一个 Cmd，执行时挂起 TUI → 执行外部命令 → 恢复 TUI → 返回 ExecDoneMsg。
 // 命令的 stdin/stdout/stderr 连接到终端，用户可以交互式使用。
 //
@@ -517,7 +564,7 @@ func (p *Program) enableTerminalFeatures() error {
 	if err := p.backend.EnableRawMode(); err != nil {
 		return err
 	}
-	if p.mouseCellMotion || p.mouseAllMotion {
+	if p.mouseCaptureEnabled.Load() {
 		if err := p.backend.EnableMouseCapture(); err != nil {
 			return err
 		}
@@ -567,7 +614,9 @@ func (p *Program) cleanup() {
 	if p.kittyKeyboard && p.kittyKeyboardCap != nil {
 		_ = p.kittyKeyboardCap.DisableKittyKeyboard()
 	}
-	if p.mouseCellMotion || p.mouseAllMotion {
+	// 仅在捕获开启时发送关闭序列：运行时经 SetMouseCapture(false) 关闭后，
+	// 退出不再重复发送（状态一致是前提，序列本身幂等无害）。
+	if p.mouseCaptureEnabled.Swap(false) {
 		_ = p.backend.DisableMouseCapture()
 	}
 	_ = p.backend.DisableRawMode()
@@ -766,8 +815,12 @@ func (p *Program) parseAndDispatch(data []byte) int {
 				// 鼠标序列未完成：保留残余等待下次 read 补全
 				return i
 			}
-			if ev, ok := terminal.ParseSGRMouseBytes(data[i+len(sgrMousePrefix) : endIdx+1]); ok {
-				p.Send(MouseMsg{MouseEvent: ev})
+			// 捕获已运行时关闭时跳过派发：终端不会再上报事件，
+			// 此处仅防御切换窗口内残留的排队尾部事件
+			if p.mouseCaptureEnabled.Load() {
+				if ev, ok := terminal.ParseSGRMouseBytes(data[i+len(sgrMousePrefix) : endIdx+1]); ok {
+					p.Send(MouseMsg{MouseEvent: ev})
+				}
 			}
 			i = endIdx + 1
 			continue

@@ -65,7 +65,8 @@ func TestParseAndDispatchKey(t *testing.T) {
 }
 
 func TestParseAndDispatchMouse(t *testing.T) {
-	p := newTestProgram(WithOutput(io.Discard))
+	// 防御路径：捕获未开启时 SGR 事件不派发，须显式开启捕获
+	p := newTestProgram(WithOutput(io.Discard), WithMouseCellMotion())
 	// SGR 鼠标左键按下：ESC[<0;10;5M
 	seq := []byte("\x1b[<0;10;5M")
 	p.parseAndDispatch(seq)

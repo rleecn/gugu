@@ -252,7 +252,7 @@ func parseCSITilde(params []byte, term byte, consumed int) (KeyEvent, int) {
 				num = atoi(parts[0])
 			}
 			if len(parts) >= 2 {
-				modifier = parseCSIModifier(atoi(parts[1]))
+				modifier = decodeModifiers(atoi(parts[1]))
 			}
 			break
 		}
@@ -335,40 +335,31 @@ func parseSS3(buf []byte) (KeyEvent, int) {
 	return KeyEvent{}, 0
 }
 
-// parseCSIModifier converts a CSI modifier number to KeyModifier.
-// CSI modifier values: 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Shift+Ctrl, 7=Alt+Ctrl, 8=Shift+Alt+Ctrl
-func parseCSIModifier(m int) KeyModifier {
-	if m <= 1 {
+// decodeModifiers 统一解码 CSI（`Pn;Mn~`）与 Kitty（`CSI kc ; mods u`）修饰符参数。
+// 两种协议约定一致：参数值 = 位域之和 + 1（即 value-1 为位域），
+// 位定义 shift=1, alt=2, ctrl=4, super=8, capslock=16, numlock=32，无修饰符发送 1。
+// gugu Modifiers 仅承载 shift/alt/ctrl；super 与锁定位由调用方经 modifiersFromBits 读取。
+func decodeModifiers(value int) KeyModifier {
+	return modifiersFromBits(value - 1)
+}
+
+// modifiersFromBits 将协议位域映射为 gugu Modifiers（仅 shift/alt/ctrl）。
+// Super 通过 KeyEvent.Super 表示，CapsLock/NumLock 通过同名字段表示，不进入 Modifiers。
+func modifiersFromBits(bits int) KeyModifier {
+	if bits <= 0 {
 		return ModNone
 	}
-	var mod KeyModifier
-	if m&2 != 0 {
-		mod |= ModShift
+	var m KeyModifier
+	if bits&1 != 0 {
+		m |= ModShift
 	}
-	if m&1 != 0 {
-		mod |= ModAlt
+	if bits&2 != 0 {
+		m |= ModAlt
 	}
-	if m&4 != 0 {
-		mod |= ModCtrl
+	if bits&4 != 0 {
+		m |= ModCtrl
 	}
-	// Standard mapping
-	switch m {
-	case 2:
-		return ModShift
-	case 3:
-		return ModAlt
-	case 4:
-		return ModShift | ModAlt
-	case 5:
-		return ModCtrl
-	case 6:
-		return ModShift | ModCtrl
-	case 7:
-		return ModAlt | ModCtrl
-	case 8:
-		return ModShift | ModAlt | ModCtrl
-	}
-	return mod
+	return m
 }
 
 // splitParams splits CSI parameters by ';'

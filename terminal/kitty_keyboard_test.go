@@ -1,23 +1,11 @@
 package terminal
 
 import (
-	"fmt"
 	"testing"
 )
 
-// kittySeq builds a Kitty keyboard sequence byte slice.
-// Format: CSI keycode ; modifiers [; event_type] u
-func kittySeq(keycode, modifiers int, eventType ...int) []byte {
-	s := fmt.Sprintf("\x1b[%d;%d", keycode, modifiers)
-	if len(eventType) > 0 && eventType[0] != 0 {
-		s += fmt.Sprintf(":%d", eventType[0])
-	}
-	s += "u"
-	return []byte(s)
-}
-
 func TestParseKittyCharLower(t *testing.T) {
-	// CSI 97 ; 0 u → 'a' no modifiers (modifiers=0 = no modifiers)
+	// CSI 97 ; 0 u → 'a' no modifiers（0 为协议外值，宽容按无修饰符处理）
 	ev, consumed := ParseKittyKeySequence([]byte("\x1b[97;0u"))
 	if consumed != 7 {
 		t.Fatalf("consumed: want 7, got %d", consumed)
@@ -34,7 +22,7 @@ func TestParseKittyCharLower(t *testing.T) {
 }
 
 func TestParseKittyCharUpper(t *testing.T) {
-	// CSI 65 ; 1 u → 'A' (no shift, raw uppercase)
+	// CSI 65 ; 1 u → 'A'（1 = 位域 0，无修饰符；原始大写字符）
 	ev, _ := ParseKittyKeySequence([]byte("\x1b[65;1u"))
 	if ev.Code != KeyChar || ev.Text != "A" {
 		t.Fatalf("code/text: want KeyChar/'A', got %v/%q", ev.Code, ev.Text)
@@ -42,31 +30,44 @@ func TestParseKittyCharUpper(t *testing.T) {
 }
 
 func TestParseKittyShiftChar(t *testing.T) {
-	// CSI 65 ; 2 u → Shift+A (modifiers 2 = Alt, wait no: 1=Shift, 2=Alt, 4=Ctrl)
-	// Actually: 1=Shift, 2=Alt, 4=Ctrl, 8=Super
-	// So Shift+A: keycode=65 (A), modifiers=1 (Shift)
+	// CSI 65 ; 2 u → Shift+A（值 2 = 位域 1 = Shift）
 	ev, _ := ParseKittyKeySequence([]byte("\x1b[65;2u"))
-	if ev.Modifiers != ModAlt {
-		t.Fatalf("modifiers: want ModAlt, got %v", ev.Modifiers)
+	if ev.Modifiers != ModShift {
+		t.Fatalf("modifiers: want ModShift, got %v", ev.Modifiers)
 	}
 }
 
 func TestParseKittyCtrlChar(t *testing.T) {
-	// CSI 97 ; 5 u → Ctrl+a (Shift=1 + Ctrl=4 = 5)
+	// CSI 97 ; 5 u → Ctrl+a（位域 ctrl=4，值 = 4+1 = 5）
 	ev, _ := ParseKittyKeySequence([]byte("\x1b[97;5u"))
 	if ev.Code != KeyChar || ev.Text != "a" {
 		t.Fatalf("code/text: want KeyChar/'a', got %v/%q", ev.Code, ev.Text)
 	}
-	if !ev.Modifiers.HasCtrl() {
-		t.Fatal("modifiers: expected Ctrl")
+	if !ev.Modifiers.HasCtrl() || ev.Modifiers != ModCtrl {
+		t.Fatalf("modifiers: want ModCtrl, got %v", ev.Modifiers)
 	}
 }
 
-func TestParseKittyCtrlAltShift(t *testing.T) {
-	// CSI 97 ; 7 u → Shift+Alt+Ctrl+a (1+2+4=7)
-	ev, _ := ParseKittyKeySequence([]byte("\x1b[97;7u"))
-	if !ev.Modifiers.HasCtrl() || !ev.Modifiers.HasAlt() || !ev.Modifiers.HasShift() {
-		t.Fatalf("modifiers: want Ctrl+Alt+Shift, got %v", ev.Modifiers)
+// 回归：修饰符参数值 = 位域之和 + 1，此前实现漏掉 -1 偏移导致
+// Ctrl+Shift 组合键全部解错（如真实终端发送 Ctrl+Shift+m 时值为 6）。
+func TestParseKittyModifierOffByOne(t *testing.T) {
+	// CSI 109 ; 6 u → Ctrl+Shift+m（位域 shift+ctrl = 1+4，值 = 5+1 = 6）
+	ev, _ := ParseKittyKeySequence([]byte("\x1b[109;6u"))
+	if ev.Code != KeyChar || ev.Text != "m" {
+		t.Fatalf("code/text: want KeyChar/'m', got %v/%q", ev.Code, ev.Text)
+	}
+	if want := ModCtrl | ModShift; ev.Modifiers != want {
+		t.Fatalf("modifiers: want %v, got %v", want, ev.Modifiers)
+	}
+	// CSI 97 ; 7 u → Ctrl+Alt+a（位域 alt+ctrl = 2+4，值 = 6+1 = 7，无 Shift）
+	ev, _ = ParseKittyKeySequence([]byte("\x1b[97;7u"))
+	if want := ModCtrl | ModAlt; ev.Modifiers != want {
+		t.Fatalf("modifiers: want %v, got %v", want, ev.Modifiers)
+	}
+	// CSI 97 ; 8 u → Ctrl+Alt+Shift+a（位域 1+2+4，值 = 7+1 = 8）
+	ev, _ = ParseKittyKeySequence([]byte("\x1b[97;8u"))
+	if want := ModCtrl | ModAlt | ModShift; ev.Modifiers != want {
+		t.Fatalf("modifiers: want %v, got %v", want, ev.Modifiers)
 	}
 }
 
@@ -133,13 +134,18 @@ func TestParseKittySpace(t *testing.T) {
 }
 
 func TestParseKittySuperKey(t *testing.T) {
-	// CSI 97 ; 9 u → Super+a (Shift=1 + Super=8 = 9)
+	// CSI 97 ; 9 u → Super+a（位域 super=8，值 = 8+1 = 9，无其他修饰符）
 	ev, _ := ParseKittyKeySequence([]byte("\x1b[97;9u"))
 	if !ev.Super {
 		t.Fatal("Super: want true")
 	}
-	if !ev.Modifiers.HasShift() {
-		t.Fatal("modifiers: expected Shift")
+	if ev.Modifiers != ModNone {
+		t.Fatalf("modifiers: want ModNone, got %v", ev.Modifiers)
+	}
+	// CSI 97 ; 10 u → Super+Shift+a（位域 8+1，值 = 9+1 = 10）
+	ev, _ = ParseKittyKeySequence([]byte("\x1b[97;10u"))
+	if !ev.Super || !ev.Modifiers.HasShift() {
+		t.Fatalf("want Super+Shift, got super=%v mods=%v", ev.Super, ev.Modifiers)
 	}
 }
 
@@ -212,19 +218,27 @@ func TestParseKittyInvalidSequences(t *testing.T) {
 }
 
 func TestParseKittyCapsLockNumLock(t *testing.T) {
-	// CapsLock: modifiers=16
-	ev, _ := ParseKittyKeySequence([]byte("\x1b[97;17u")) // Shift(1) + CapsLock(16) = 17
+	// CSI 97 ; 17 u → CapsLock+a（位域 capslock=16，值 = 16+1 = 17，无 Shift）
+	ev, _ := ParseKittyKeySequence([]byte("\x1b[97;17u"))
 	if !ev.CapsLock {
 		t.Fatal("CapsLock: want true")
 	}
-	if !ev.Modifiers.HasShift() {
-		t.Fatal("modifiers: expected Shift")
+	if ev.Modifiers != ModNone {
+		t.Fatalf("modifiers: want ModNone, got %v", ev.Modifiers)
+	}
+	// CSI 97 ; 18 u → CapsLock+Shift+a（位域 16+1，值 = 17+1 = 18）
+	ev, _ = ParseKittyKeySequence([]byte("\x1b[97;18u"))
+	if !ev.CapsLock || !ev.Modifiers.HasShift() {
+		t.Fatalf("want CapsLock+Shift, got caps=%v mods=%v", ev.CapsLock, ev.Modifiers)
 	}
 
-	// NumLock: modifiers=32
-	ev, _ = ParseKittyKeySequence([]byte("\x1b[97;33u")) // Shift(1) + NumLock(32) = 33
+	// CSI 97 ; 33 u → NumLock+a（位域 numlock=32，值 = 32+1 = 33）
+	ev, _ = ParseKittyKeySequence([]byte("\x1b[97;33u"))
 	if !ev.NumLock {
 		t.Fatal("NumLock: want true")
+	}
+	if ev.Modifiers != ModNone {
+		t.Fatalf("modifiers: want ModNone, got %v", ev.Modifiers)
 	}
 }
 
